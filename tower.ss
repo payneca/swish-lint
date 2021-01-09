@@ -164,6 +164,34 @@ substr(F.filename,-3)='.ss' desc, F.filename asc, D.line asc"
        (do-log 2
          (or (json:ref msg '(params timestamp) #f) (erlang:now))
          (json:get msg '(params message)))]
+      [get-hover
+       (let* ([filename (json:get msg '(params filename))]
+              [line (json:get msg '(params line))]
+              [char (json:get msg '(params char))]
+              [name (json:get msg '(params name))]
+              [root-fk (root-key)]
+              [start (erlang:now)]
+              [hover
+               ;; TODO: need to manage file/project scoping
+               (scalar
+                (transaction 'log-db
+                  (execute "select json_extract(meta, '$.hover') as hover from keywords where keyword=? and hover is not null limit 1" name)))]
+              [hover
+               (if hover
+                   (json:make-object
+                    [contents hover])
+                   #\nul)]
+              [end (erlang:now)]
+              [log (json:make-object
+                    [_op_ "get-hover"]
+                    [filename filename]
+                    [line line]
+                    [char char]
+                    [name name]
+                    [found? (if hover #t #f)]
+                    [time (- end start)])])
+         (do-log 1 log)
+         (rpc:respond ws msg hover))]
       [get-completions
        (let* ([filename (json:get msg '(params filename))]
               [line (json:get msg '(params line))]

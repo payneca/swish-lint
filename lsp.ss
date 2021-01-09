@@ -342,6 +342,15 @@
      (lambda ()
        (catch (do-update-refs uri text annotated-code source-table)))))
 
+  (define (get-hover doc uri line char)
+    (let ([line (+ line 1)]             ; LSP is 0-based
+          [char (+ char 1)])
+      (cond
+       [(doc:get-value-near doc line char) =>
+        (lambda (name)
+          (tower-client:get-hover (uri->abs-path uri) line char name))]
+       [else #\nul])))
+
   (define (get-completions doc uri line char)
     (let ([line (+ line 1)]       ; LSP is 0-based
           #;[char (+ char 1)])    ; ... but we want the preceding char
@@ -629,7 +638,7 @@
                     [willSave #f]
                     [willSaveWaitUntil #f]
                     [save (json:make-object [includeText #t])])]
-                  [hoverProvider #f]
+                  [hoverProvider #t]
                   [completionProvider #t]
                   [definitionProvider #t]
                   [referencesProvider #t]
@@ -643,7 +652,14 @@
                  [root-dir root-dir]
                  [client-cap client-cap])))]
         ["textDocument/hover"
-         `#(ok #f ,state)]
+         (let ([uri (json:get params '(textDocument uri))]
+               [line (json:get params '(position line))]
+               [char (json:get params '(position character))])
+           (cond
+            [(ht:ref ($state uri->doc) uri #f) =>
+             (lambda (doc)
+               `#(spawn ,(lambda () (get-hover doc uri line char)) ,state))]
+            [else `#(ok #f ,state)]))]
         ["textDocument/completion"
          (let ([uri (json:get params '(textDocument uri))]
                [line (json:get params '(position line))]

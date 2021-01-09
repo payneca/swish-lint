@@ -27,6 +27,7 @@
    tower-client:call
    tower-client:get-completions
    tower-client:get-definitions
+   tower-client:get-hover
    tower-client:get-local-references
    tower-client:get-references
    tower-client:get-signatures
@@ -213,6 +214,17 @@
 
   (define (tower-client:cast msg)
     (gen-server:cast 'tower-client `#(cast ,msg)))
+
+  (define (tower-client:get-hover filename line char name)
+    (tower-client:call
+     (json:make-object
+      [method "get-hover"]
+      [params
+       (json:make-object
+        [filename filename]
+        [line line]
+        [char char]
+        [name name])])))
 
   (define (tower-client:get-completions filename line char prefix)
     (tower-client:call
