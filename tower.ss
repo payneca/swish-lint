@@ -300,6 +300,32 @@ order by rank desc, count desc, candidates.name asc"
                     [time (- end start)])])
          (do-log 1 log)
          (rpc:respond ws msg refs))]
+      [get-signatures
+       (let* ([filename (json:get msg '(params filename))]
+              [name (json:get msg '(params name))]
+              [root-fk (root-key)]
+              [start (erlang:now)]
+              [sigs
+                (map
+                 (lambda (row)
+                   (match row
+                     [#(,sig ,doc)
+                      (let ([obj (json:make-object [label sig])])
+                        (when doc
+                          (json:extend-object obj
+                            [documentation doc]))
+                        obj)]))
+                 (transaction 'log-db
+                   (execute "select json_extract(meta, '$.signature') as sig, json_extract(meta, '$.documentation') as doc from keywords where keyword=? and sig is not null" name)))]
+              [end (erlang:now)]
+              [log (json:make-object
+                    [_op_ "get-signatures"]
+                    [filename filename]
+                    [name name]
+                    [found (length sigs)]
+                    [time (- end start)])])
+         (do-log 1 log)
+         (rpc:respond ws msg sigs))]
       [reset-directory
        (let* ([dir (json:get msg '(params directory))]
               [pk

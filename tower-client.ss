@@ -29,6 +29,7 @@
    tower-client:get-definitions
    tower-client:get-local-references
    tower-client:get-references
+   tower-client:get-signatures
    tower-client:log
    tower-client:reset-directory
    tower-client:shutdown-server
@@ -237,6 +238,15 @@
     (tower-client:call
      (json:make-object
       [method "get-references"]
+      [params
+       (json:make-object
+        [filename filename]
+        [name name])])))
+
+  (define (tower-client:get-signatures filename name)
+    (tower-client:call
+     (json:make-object
+      [method "get-signatures"]
       [params
        (json:make-object
         [filename filename]

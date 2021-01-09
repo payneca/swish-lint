@@ -387,6 +387,18 @@
            (tower-client:get-references (uri->abs-path uri) name)))]
        [else '()])))
 
+  (define (get-signatures doc uri line char)
+    (let* ([line (+ line 1)]            ; LSP is 0-based
+           [char (+ char 1)]
+           [sigs
+            (cond
+             [(doc:get-value-near doc line char) =>
+              (lambda (name)
+                (tower-client:get-signatures (uri->abs-path uri) name))]
+             [else '()])]
+           [sigs (if (null? sigs) #\nul sigs)])
+      (json:make-object [signatures sigs])))
+
   (define (highlight-references doc uri line char)
     (let ([line (+ line 1)]             ; LSP is 0-based
           [char (+ char 1)])
@@ -624,6 +636,7 @@
                   [documentHighlightProvider #t]
                   [documentFormattingProvider #t]
                   [documentRangeFormattingProvider #t]
+                  [signatureHelpProvider #t]
                   )])
               ,($state copy
                  [root-uri root-uri]
@@ -658,6 +671,15 @@
              (lambda (doc)
                `#(spawn ,(lambda () (get-references doc uri line char)) ,state))]
             [else `#(ok () ,state)]))]
+        ["textDocument/signatureHelp"
+         (let ([uri (json:get params '(textDocument uri))]
+               [line (json:get params '(position line))]
+               [char (json:get params '(position character))])
+           (cond
+            [(ht:ref ($state uri->doc) uri #f) =>
+             (lambda (doc)
+               `#(spawn ,(lambda () (get-signatures doc uri line char)) ,state))]
+            [else `#(ok #f ,state)]))]
         ["textDocument/documentHighlight"
          (let ([uri (json:get params '(textDocument uri))]
                [line (json:get params '(position line))]
