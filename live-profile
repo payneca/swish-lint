@@ -259,6 +259,11 @@
         [filename filename]
         [note (opt 'note)]))))])
 
+(define (scalar x)
+  (match x
+    [(#(,v)) v]
+    [() #f]))
+
 (let ()
   (define (arg->integer s)
     (define (parse s i n v)
@@ -272,10 +277,6 @@
            (if (char=? (string-ref s 0) #\-)
                (- (parse s 1 n 0))
                (parse s 0 n 0)))))
-  (define (scalar x)
-    (match x
-      [(#(,v)) v]
-      [() #f]))
   (define (not-found conn)
     (http:respond conn 404 '()
       (html->bytevector
@@ -538,4 +539,16 @@
         permanent 1000 worker))))
 (app:start)
 (printf "Started at http://localhost:~a/\n" (http:get-port-number 'http))
+
+(printf "Table sizes:\n")
+(transaction 'db
+  (for-each
+   (lambda (row)
+     (match row
+       [#(,name)
+        (printf "~15a: ~10:d\n" name
+          (scalar (execute (format "select count(*) from ~a" name))))]))
+   (execute "select name from sqlite_schema where type='table' order by name")))
+(newline)
+
 (swish-start)
