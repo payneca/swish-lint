@@ -238,13 +238,16 @@
      [/files
       (http:url-handler
        (let ([obs (obs->list (http:find-param 'obs params))])
-         (http:respond conn 200 '(("Content-Type" . "text.html"))
+         (http:respond conn 200 '(("Content-Type" . "text/html"))
            (html->bytevector
             `(html5
               (head
                (meta (@ (charset "UTF-8")))
-               (title "Main Page"))
-              (body (@ (style "font-family:monospace"))
+               (title "Main Page")
+               (link (@ (type "text/css")
+                        (rel "stylesheet")
+                        (href "style.css"))))
+              (body
                 ,(navigation-panel "/files" #f obs)
                 (pre
                  ,@(map
@@ -305,18 +308,16 @@
               (define (get-efp row) (vector-ref row 1))
               (define (get-count row) (vector-ref row 2))
 
-              (define (colorize x max-count)
+              (define (color-class x max-count)
                 (cond
-                 [(= x 0) "#C0C0C0"]         ;; gray
-                 [(= max-count 1) "#FFFF80"] ;; yellow
+                 [(= x 0) "c0"]
+                 [(= max-count 1) "c128"]
                  [else
-                  ;; from red to yellow on a log scale
-                  (let ([s (number->string
-                            (+ (inexact->exact
-                                (round (* (/ (log x) (log max-count)) #x7F)))
-                               #x80)
-                            16)])
-                    (string-append "#FF" s "80"))]))
+                  ;; from min to max on a log scale
+                  (format "c~d"
+                    (+ (inexact->exact
+                        (round (* (/ (log x) (log max-count)) 127)))
+                       1))]))
 
               (fprintf op
                 (ct:join ""
@@ -325,11 +326,12 @@
                   "<head>"
                   "<meta charset=\"UTF-8\">"
                   "<title>~a</title>"
+                  "<link type=\"text/css\" rel=\"stylesheet\" href=\"style.css\">"
                   "</head>")
                 (html:encode filename))
               (fprintf op
                 (ct:join ""
-                  "<body style=\"font-family:monospace\">"
+                  "<body>"
                   "~a"
                   "<h1>~a</h1>"
                   "<pre>")
@@ -345,8 +347,8 @@
                   (lambda (row)
                     (let* ([count (get-count row)]
                            [span-str
-                            (format "<span title=\"~:d\" style=\"background-color: ~a\">"
-                              count (colorize count max-count))])
+                            (format "<span title=\"~:d\" class=\"~a\">"
+                              count (color-class count max-count))])
                       (display-string span-str op)
                       (lp fp (cdr ls) (cons (get-efp row) efp-stack) #f (cons span-str span-stack))))]
                  [else
@@ -400,17 +402,17 @@
                   "</body>"
                   "</html>"))
 
-              (http:respond conn 200 '(("Content-Type" . "text.html")) (get)))
-            #; ;; Plain
-            (http:respond conn 200 '(("Content-Type" . "text.html"))
-              (html->bytevector
-               `(html5
-                 (head
-                  (meta (@ (charset "UTF-8")))
-                  (title ,filename))
-                 (body (@ (style "font-family:monospace"))
-                   (pre ,(utf8->string code))))))
-            ])))]))
+              (http:respond conn 200 '(("Content-Type" . "text/html")) (get)))])))]
+     [/style.css
+      (http:url-handler
+       (define-values (op get) (open-bytevector-output-port (make-utf8-transcoder)))
+       (fprintf op "BODY { font-family: monospace; }\n")
+       ;; 0=gray, 1=red .. 128=yellow
+       (fprintf op ".c0 { background-color: #C0C0C0; }\n")
+       (do ([i 1 (fx+ i 1)] [g 128 (fx+ g 1)]) ((= g 256))
+         (fprintf op ".c~d { background-color: #FF~2,'0x80; }\n" i g))
+       (http:respond conn 200 '(("Content-Type" . "text/css")) (get)))]
+     ))
 
   (http:add-server 'http 54321
     (http:url-handler
