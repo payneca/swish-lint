@@ -10,6 +10,8 @@
 ;;  - hover over test code in one pane and highlight the product code it exercises in another pane
 ;;  - makes sense that we'd be able to navigate source using info from the Tower if available
 
+(import (indent))
+
 ;; TODO: Eliminate
 (define hack-directory "/Users/capayne/src/chez-scheme/s")
 
@@ -39,7 +41,7 @@
               [sfd (source-object-sfd so)])
          (db:log 'db
            (ct:join " "
-             "insert into stage"
+             "insert into stage_profile"
              "(meta,filename,checksum,bfp,efp,count)"
              "values (?,?,?,?,?,?)")
            meta
@@ -55,8 +57,8 @@
     (unlink pid)
     (on-exit (db:stop pid)
       (transaction 'db
-        (execute "drop table if exists stage")
-        (create-table stage
+        (execute "drop table if exists stage_profile")
+        (create-table stage_profile
           [meta text]
           [filename text]
           [checksum integer]
@@ -64,11 +66,27 @@
           [efp integer]
           [count integer])
 
+        (execute "drop table if exists stage_token")
+        (create-table stage_token
+          [src_fk integer]
+          [type text]
+          [value text]
+          [raw text]
+          [bfp integer]
+          [efp integer]
+          [err text])
+
         (unless (opt 'merge)
           (execute "drop table if exists dim_observation")
           (create-table dim_observation
             [obs_pk integer primary key]
             [obs_meta text])
+
+          (execute "drop table if exists dim_range")
+          (create-table dim_range
+            [rng_pk integer primary key]
+            [rng_bfp integer]
+            [rng_efp integer])
 
           (execute "drop table if exists dim_source")
           (create-table dim_source
@@ -78,13 +96,27 @@
             [src_code text]        ; TODO: We might prefer a blob here
             )
 
+          (execute "drop table if exists dim_token")
+          (create-table dim_token
+            [tok_pk integer primary key]
+            [tok_type text]
+            [tok_value text]
+            [tok_raw text]
+            [tok_err text])
+
           (execute "drop table if exists fact_profile")
           (create-table fact_profile
             [obs_fk integer]
             [src_fk integer]
-            [bfp integer]
-            [efp integer]
-            [count integer])))
+            [rng_fk integer]
+            [count integer])
+
+          (execute "drop table if exists fact_tokens")
+          (create-table fact_tokens
+            [src_fk integer]
+            [tok_fk integer]
+            [rng_fk integer])
+          ))
 
       (import-coverage filename meta)
 
@@ -92,53 +124,126 @@
         (execute
          (ct:join " "
            "insert into dim_observation (obs_meta)"
-           "select distinct meta from stage"
+           "select distinct meta from stage_profile"
            "except select obs_meta from dim_observation"))
         (execute
          (ct:join " "
+           "insert into dim_range (rng_bfp,rng_efp)"
+           "select distinct bfp,efp from stage_profile"
+           "except select rng_bfp,rng_efp from dim_range"))
+        (execute
+         (ct:join " "
            "insert into dim_source (src_filename, src_checksum)"
-           "select distinct filename, checksum from stage"
+           "select distinct filename, checksum from stage_profile"
            "except select src_filename, src_checksum from dim_source"))
         (execute
          (ct:join " "
            "insert into fact_profile"
-           "(obs_fk, src_fk, bfp, efp, count)"
-           "select obs_pk, src_pk, bfp, efp, count"
-           "from stage"
+           "(obs_fk, src_fk, rng_fk, count)"
+           "select obs_pk, src_pk, rng_pk, count"
+           "from stage_profile"
            "inner join dim_observation on meta=obs_meta"
-           "inner join dim_source on filename=src_filename and checksum=src_checksum"))
-        )
+           "inner join dim_source on filename=src_filename and checksum=src_checksum"
+           "inner join dim_range on bfp=rng_bfp and efp=rng_efp")))
 
-      (transaction 'db
-        (define (create-index name sql)
-          (execute (format "create index if not exists ~a on ~a" name sql)))
-        (create-index 'fa_pr_obs "fact_profile (obs_fk)")
-        (create-index 'fa_pr_src "fact_profile (src_fk)")
-        (create-index 'fa_pr_bfp "fact_profile (bfp)")
-        (create-index 'fa_pr_efp "fact_profile (bfp)"))
+      (let* ([rows (transaction 'db
+                     (execute
+                      (ct:join " "
+                        "select src_pk, src_filename, src_checksum"
+                        "from dim_source"
+                        "where src_code is null")))]
+             [rows
+              (transaction 'db
+                (map
+                 (lambda (row)
+                   (match row
+                     [#(,pk ,fn ,cs)
+                      (match (try (read-file (path-combine hack-directory fn)))
+                        [`(catch ,reason)
+                         (printf "  ~a: ~a\n" fn (exit-reason->english reason))
+                         (vector pk fn #f)]
+                        [,code
+                         (let ([sfd (make-source-file-descriptor fn (open-bytevector-input-port code))])
+                           (cond
+                            [(eqv? (source-file-descriptor-checksum sfd) cs)
+                             (execute "update dim_source set src_code=? where src_pk=?" code pk)]
+                            [else
+                             (printf "  ~a: mismatched checksums\n" fn)]))
+                         (vector pk fn code)])]))
+                 rows))])
+        (time
+         (begin
+           (for-each
+            (lambda (row)
+              (match row
+                [#(,src ,fn ,code)
+                 (match (try (tokenize (utf8->string code)))
+                   [`(catch ,reason)
+                    (printf "  ~a: ~a\n" fn (exit-reason->english reason))]
+                   [,tokens
+                    (for-each
+                     (lambda (t)
+                       (db:log 'db
+                         (ct:join " "
+                           "insert into stage_token"
+                           "(src_fk,type,value,raw,bfp,efp,err)"
+                           "values (?,?,?,?,?,?,?)")
+                         src
+                         (coerce (token-type t))
+                         (coerce (token-value t))
+                         (coerce (token-raw t))
+                         (token-bfp t)
+                         (token-efp t)
+                         (coerce (token-err t))))
+                     tokens)])]))
+            rows)
 
-      (transaction 'db (execute "drop table stage"))
+           (transaction 'db
+             (execute
+              (ct:join " "
+                "insert into dim_token (tok_type,tok_value,tok_raw,tok_err)"
+                "select distinct type,value,raw,err from stage_token"
+                "except select tok_type,tok_value,tok_raw,tok_err from dim_token"))
+             (execute
+              (ct:join " "
+                "insert into dim_range (rng_bfp,rng_efp)"
+                "select distinct bfp,efp from stage_token"
+                "except select rng_bfp,rng_efp from dim_range"))
+             ;; TODO: is it possible it's enough to join on 'raw'
+             ;; and 'err' for tokens?
 
-      (transaction 'db
-        (for-each
-         (lambda (row)
-           (match row
-             [#(,pk ,fn ,cs)
-              (match (try (read-file (path-combine hack-directory fn)))
-                [`(catch ,reason)
-                 (printf "  ~a: ~a\n" fn (exit-reason->english reason))]
-                [,code
-                 (let ([sfd (make-source-file-descriptor fn (open-bytevector-input-port code))])
-                   (cond
-                    [(eqv? (source-file-descriptor-checksum sfd) cs)
-                     (execute "update dim_source set src_code=? where src_pk=?" code pk)]
-                    [else
-                     (printf "  ~a: mismatched checksums\n" fn)]))])]))
-         (execute
-          (ct:join " "
-            "select src_pk, src_filename, src_checksum"
-            "from dim_source"
-            "where src_code is null")))))))
+             ;; N.B. "value is tok_value" and "err is tok_err"
+             ;; may be necessary because value and err can be
+             ;; NULL.
+             (execute
+              (ct:join " "
+                "insert into fact_tokens"
+                "(src_fk, tok_fk, rng_fk)"
+                "select src_fk, tok_pk, rng_pk"
+                "from stage_token"
+                "inner join dim_token on type=tok_type and value is tok_value and raw=tok_raw and err is tok_err"
+                "inner join dim_range on bfp=rng_bfp and efp=rng_efp")))
+           ))
+
+        (transaction 'db
+          (define (create-index name sql)
+            (execute (format "create index if not exists ~a on ~a" name sql)))
+          (create-index 'dim_rng_bfp "dim_range (rng_bfp)")
+          (create-index 'dim_rng_efp "dim_range (rng_efp)")
+
+          (create-index 'fa_pr_obs "fact_profile (obs_fk)")
+          (create-index 'fa_pr_rng "fact_profile (rng_fk)")
+          (create-index 'fa_pr_src "fact_profile (src_fk)")
+
+          (create-index 'fa_to_rng "fact_tokens (rng_fk)")
+          (create-index 'fa_to_src "fact_tokens (src_fk)")
+          (create-index 'fa_to_tok "fact_tokens (tok_fk)")
+          )
+
+        (transaction 'db
+          (execute "drop table stage_profile")
+          (execute "drop table stage_token"))
+        ))))
 
 (cond
  [(opt 'help)
@@ -148,10 +253,11 @@
 (cond
  [(opt 'import) =>
   (lambda (filename)
-    (build-database filename
-      (json:make-object
-       [filename filename]
-       [note (opt 'note)])))])
+    (time
+     (build-database filename
+       (json:make-object
+        [filename filename]
+        [note (opt 'note)]))))])
 
 (let ()
   (define (arg->integer s)
@@ -248,24 +354,24 @@
                         (rel "stylesheet")
                         (href "style.css"))))
               (body
-                ,(navigation-panel "/files" #f obs)
-                (pre
-                 ,@(map
-                    (lambda (row)
-                      (match row
-                        [#(,src ,filename ,code?)
-                         (let ([code? (not (zero? code?))])
-                           `(div
-                             ,(format "~2d: " src)
-                             ,(if code?
-                                  (link filename "/source" src obs)
-                                  filename)))]))
-                    (transaction 'db
-                      (execute
-                       (ct:join " "
-                         "select src_pk,src_filename,src_code is not null"
-                         "from dim_source"
-                         "order by src_filename")))))))))))]
+               ,(navigation-panel "/files" #f obs)
+               (pre
+                ,@(map
+                   (lambda (row)
+                     (match row
+                       [#(,src ,filename ,code?)
+                        (let ([code? (not (zero? code?))])
+                          `(div
+                            ,(format "~2d: " src)
+                            ,(if code?
+                                 (link filename "/source" src obs)
+                                 filename)))]))
+                   (transaction 'db
+                     (execute
+                      (ct:join " "
+                        "select src_pk,src_filename,src_code is not null"
+                        "from dim_source"
+                        "order by src_filename")))))))))))]
      [/source
       (http:url-handler
        (let ([src (arg->integer (http:get-param 'src params))]
@@ -281,12 +387,13 @@
                      (apply execute
                        (format
                         (ct:join " "
-                          "select distinct bfp, efp, SUM(count)"
+                          "select distinct rng_bfp, rng_efp, SUM(count)"
                           "from fact_profile"
+                          "inner join dim_range on rng_pk=rng_fk"
                           "where src_fk=?"
                           "and obs_fk in (~a)"
-                          "group by bfp, efp"
-                          "order by bfp")
+                          "group by rng_bfp, rng_efp"
+                          "order by rng_bfp")
                         (template obs))
                        src
                        obs))]
