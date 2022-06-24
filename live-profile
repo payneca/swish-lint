@@ -1,0 +1,432 @@
+#! /usr/bin/env swish
+;; MVP
+;;  - load source-table profile results
+;;  - display individual results
+;;  - display delta between specified results
+;;    - for now, require that results have same source (entire file matches)
+;;
+;; more
+;;  - navigate by profile count, likely a query result
+;;  - hover over test code in one pane and highlight the product code it exercises in another pane
+;;  - makes sense that we'd be able to navigate source using info from the Tower if available
+
+;; TODO: Eliminate
+(define hack-directory "/Users/capayne/src/chez-scheme/s")
+
+(define cli
+  (cli-specs
+   default-help
+   [import |-i| --import (string "<filename>") "import covout file"]
+   [merge -m --merge bool "merge data into existing database"]
+   [note -n --note (string "<note>") "metadata to attach to the import"]
+   ))
+
+(define opt (parse-command-line-arguments cli))
+
+(define (import-coverage filename meta)
+  (printf "importing...~a\n" filename)
+  (let ([ip (open-file-input-port filename
+              (file-options compressed)
+              (buffer-mode block)
+              (native-transcoder))]
+        [st (make-source-table)]
+        [meta (json:object->string meta)])
+    (get-source-table! ip st)
+    (for-each
+     (lambda (p)
+       (let* ([so (car p)]
+              [count (cdr p)]
+              [sfd (source-object-sfd so)])
+         (db:log 'db
+           (ct:join " "
+             "insert into stage"
+             "(meta,filename,checksum,bfp,efp,count)"
+             "values (?,?,?,?,?,?)")
+           meta
+           (source-file-descriptor-path sfd)
+           (source-file-descriptor-checksum sfd)
+           (source-object-bfp so)
+           (source-object-efp so)
+           count)))
+     (source-table-dump st))))
+
+(define (build-database filename meta)
+  (match-let* ([#(ok ,pid) (db:start&link 'db "profile.db3" 'create)])
+    (unlink pid)
+    (on-exit (db:stop pid)
+      (transaction 'db
+        (execute "drop table if exists stage")
+        (create-table stage
+          [meta text]
+          [filename text]
+          [checksum integer]
+          [bfp integer]
+          [efp integer]
+          [count integer])
+
+        (unless (opt 'merge)
+          (execute "drop table if exists dim_observation")
+          (create-table dim_observation
+            [obs_pk integer primary key]
+            [obs_meta text])
+
+          (execute "drop table if exists dim_source")
+          (create-table dim_source
+            [src_pk integer primary key]
+            [src_filename text]
+            [src_checksum integer]
+            [src_code text]        ; TODO: We might prefer a blob here
+            )
+
+          (execute "drop table if exists fact_profile")
+          (create-table fact_profile
+            [obs_fk integer]
+            [src_fk integer]
+            [bfp integer]
+            [efp integer]
+            [count integer])))
+
+      (import-coverage filename meta)
+
+      (transaction 'db
+        (execute
+         (ct:join " "
+           "insert into dim_observation (obs_meta)"
+           "select distinct meta from stage"
+           "except select obs_meta from dim_observation"))
+        (execute
+         (ct:join " "
+           "insert into dim_source (src_filename, src_checksum)"
+           "select distinct filename, checksum from stage"
+           "except select src_filename, src_checksum from dim_source"))
+        (execute
+         (ct:join " "
+           "insert into fact_profile"
+           "(obs_fk, src_fk, bfp, efp, count)"
+           "select obs_pk, src_pk, bfp, efp, count"
+           "from stage"
+           "inner join dim_observation on meta=obs_meta"
+           "inner join dim_source on filename=src_filename and checksum=src_checksum"))
+        )
+
+      (transaction 'db
+        (define (create-index name sql)
+          (execute (format "create index if not exists ~a on ~a" name sql)))
+        (create-index 'fa_pr_obs "fact_profile (obs_fk)")
+        (create-index 'fa_pr_src "fact_profile (src_fk)")
+        (create-index 'fa_pr_bfp "fact_profile (bfp)")
+        (create-index 'fa_pr_efp "fact_profile (bfp)"))
+
+      (transaction 'db (execute "drop table stage"))
+
+      (transaction 'db
+        (for-each
+         (lambda (row)
+           (match row
+             [#(,pk ,fn ,cs)
+              (match (try (read-file (path-combine hack-directory fn)))
+                [`(catch ,reason)
+                 (printf "  ~a: ~a\n" fn (exit-reason->english reason))]
+                [,code
+                 (let ([sfd (make-source-file-descriptor fn (open-bytevector-input-port code))])
+                   (cond
+                    [(eqv? (source-file-descriptor-checksum sfd) cs)
+                     (execute "update dim_source set src_code=? where src_pk=?" code pk)]
+                    [else
+                     (printf "  ~a: mismatched checksums\n" fn)]))])]))
+         (execute
+          (ct:join " "
+            "select src_pk, src_filename, src_checksum"
+            "from dim_source"
+            "where src_code is null")))))))
+
+(cond
+ [(opt 'help)
+  (display-help (app:name) cli (opt))
+  (exit 0)])
+
+(cond
+ [(opt 'import) =>
+  (lambda (filename)
+    (build-database filename
+      (json:make-object
+       [filename filename]
+       [note (opt 'note)])))])
+
+(let ()
+  (define (arg->integer s)
+    (define (parse s i n v)
+      (if (= i n)
+          v
+          (let ([d (- (char->integer (string-ref s i)) (char->integer #\0))])
+            (and (<= 0 d 9)
+                 (parse s (+ i 1) n (+ (* v 10) d))))))
+    (let ([n (string-length s)])
+      (and (<= 1 n 13)
+           (if (char=? (string-ref s 0) #\-)
+               (- (parse s 1 n 0))
+               (parse s 0 n 0)))))
+  (define (scalar x)
+    (match x
+      [(#(,v)) v]
+      [() #f]))
+  (define (not-found conn)
+    (http:respond conn 404 '()
+      (html->bytevector
+       `(html5
+         (head
+          (meta (@ (charset "UTF-8")))
+          (title "Page not found"))
+         (body
+          (h1 "Nothing to see here. Move along."))))))
+  (define (obs->list x)
+    (cond
+     [(not x) '()]
+     [(not (string? x)) (bad-arg 'obs->list x)]
+     [(string=? x "") '()]
+     [else
+      (let ([ls (map arg->integer (split x #\,))])
+        (when (ormap not ls)
+          (bad-arg 'obs->list x))
+        ls)]))
+  (define (template ls)
+    (join (map (lambda (x) "?") ls) #\,))
+
+  (define (link anchor base-url src obs-list)
+    (let* ([args '()]
+           [args (if (pair? obs-list)
+                     (cons (cons 'obs (join obs-list #\,)) args)
+                     args)]
+           [args (if src
+                     (cons (cons 'src src) args)
+                     args)]
+           [url (format "~a~:[?~a~;~]" base-url
+                  (null? args)
+                  (if (null? args)
+                      ""
+                      (join
+                       (map
+                        (lambda (arg)
+                          (format "~a=~a" (car arg) (cdr arg)))
+                        args)
+                       #\&)))])
+      `(a (@ (href ,url)) ,anchor)))
+
+  (define (navigation-panel base-url src obs)
+    `(div
+      ,(link "files" "/files" #f obs)
+      ,@(map
+         (lambda (row)
+           (match row
+             [#(,pk ,note)
+              `(div
+                ,(link note base-url src
+                   (if (memv pk obs)
+                       (remv pk obs)
+                       (sort < (cons pk obs)))))]))
+         (transaction 'db
+           (execute
+            (ct:join " "
+              "select obs_pk, json_extract(obs_meta, '$.note')"
+              "from dim_observation"))))))
+
+  (define pages
+    (json:make-object
+     [/
+      (http:url-handler
+       (http:respond conn 302 `(("Location" . "/files")) '#vu8()))]
+     [/files
+      (http:url-handler
+       (let ([obs (obs->list (http:find-param 'obs params))])
+         (http:respond conn 200 '(("Content-Type" . "text.html"))
+           (html->bytevector
+            `(html5
+              (head
+               (meta (@ (charset "UTF-8")))
+               (title "Main Page"))
+              (body (@ (style "font-family:monospace"))
+                ,(navigation-panel "/files" #f obs)
+                (pre
+                 ,@(map
+                    (lambda (row)
+                      (match row
+                        [#(,src ,filename ,code?)
+                         (let ([code? (not (zero? code?))])
+                           `(div
+                             ,(format "~2d: " src)
+                             ,(if code?
+                                  (link filename "/source" src obs)
+                                  filename)))]))
+                    (transaction 'db
+                      (execute
+                       (ct:join " "
+                         "select src_pk,src_filename,src_code is not null"
+                         "from dim_source"
+                         "order by src_filename")))))))))))]
+     [/source
+      (http:url-handler
+       (let ([src (arg->integer (http:get-param 'src params))]
+             [obs (obs->list (http:find-param 'obs params))])
+         (match (transaction 'db
+                  (execute "select src_filename, src_code from dim_source where src_pk=?" src))
+           [() (not-found conn)]
+           [(#(,filename ,code))
+            ;; Fancy
+            (let ([ip (open-bytevector-input-port code (make-utf8-transcoder))]
+                  [data
+                   (transaction 'db
+                     (apply execute
+                       (format
+                        (ct:join " "
+                          "select distinct bfp, efp, SUM(count)"
+                          "from fact_profile"
+                          "where src_fk=?"
+                          "and obs_fk in (~a)"
+                          "group by bfp, efp"
+                          "order by bfp")
+                        (template obs))
+                       src
+                       obs))]
+                  [max-count
+                   (scalar
+                    (transaction 'db
+                      (apply execute
+                        (format
+                         (ct:join " "
+                           "select max(count)"
+                           "from fact_profile"
+                           "where src_fk=?"
+                           "and obs_fk in (~a)")
+                         (template obs))
+                        src
+                        obs)))])
+              (define-values (op get) (open-bytevector-output-port (make-utf8-transcoder)))
+              (define (get-bfp row) (vector-ref row 0))
+              (define (get-efp row) (vector-ref row 1))
+              (define (get-count row) (vector-ref row 2))
+
+              (define (colorize x max-count)
+                (cond
+                 [(= x 0) "#C0C0C0"]         ;; gray
+                 [(= max-count 1) "#FFFF80"] ;; yellow
+                 [else
+                  ;; from red to yellow on a log scale
+                  (let ([s (number->string
+                            (+ (inexact->exact
+                                (round (* (/ (log x) (log max-count)) #x7F)))
+                               #x80)
+                            16)])
+                    (string-append "#FF" s "80"))]))
+
+              (fprintf op
+                (ct:join ""
+                  "<!DOCTYPE html>"
+                  "<html>"
+                  "<head>"
+                  "<meta charset=\"UTF-8\">"
+                  "<title>~a</title>"
+                  "</head>")
+                (html:encode filename))
+              (fprintf op
+                (ct:join ""
+                  "<body style=\"font-family:monospace\">"
+                  "~a"
+                  "<h1>~a</h1>"
+                  "<pre>")
+                (html->string (navigation-panel "/source" src obs))
+                (html:encode filename))
+
+              (let lp ([fp 0] [ls data] [efp-stack '()] [leading? #t] [span-stack '()])
+                (cond
+                 [(and (pair? efp-stack) (= (car efp-stack) fp))
+                  (display-string "</span>" op)
+                  (lp fp ls (cdr efp-stack) leading? (cdr span-stack))]
+                 [(and (pair? ls) (let ([row (car ls)]) (and (= (get-bfp row) fp) row))) =>
+                  (lambda (row)
+                    (let* ([count (get-count row)]
+                           [span-str
+                            (format "<span title=\"~:d\" style=\"background-color: ~a\">"
+                              count (colorize count max-count))])
+                      (display-string span-str op)
+                      (lp fp (cdr ls) (cons (get-efp row) efp-stack) #f (cons span-str span-stack))))]
+                 [else
+                  (let ([c (read-char ip)])
+                    (unless (eof-object? c)
+                      (cond
+                       [(eq? c #\newline)
+                        (when (pair? span-stack)
+                          (for-each
+                           (lambda (x)
+                             (display-string "</span>" op))
+                           span-stack))
+                        ;;(html:encode op "$")
+                        (html:encode op (format "~a" c))
+                        (lp (+ fp 1) ls efp-stack #t span-stack)]
+                       [(and leading? (char-whitespace? c))
+                        (html:encode op (format "~a" c))
+                        (lp (+ fp 1) ls efp-stack leading? span-stack)]
+                       [else
+                        (when leading?
+                          ;;(html:encode op "^")
+                          (when (pair? span-stack)
+                            (for-each
+                             (lambda (span-str)
+                               (display-string span-str op))
+                             (reverse span-stack))))
+                        (html:encode op (format "~a" c))
+                        (lp (+ fp 1) ls efp-stack #f span-stack)])))]))
+
+              #;
+              (let lp ([fp 0] [ls data] [efp-stack '()])
+                (cond
+                 [(and (pair? efp-stack) (= (car efp-stack) fp))
+                  (display-string "</span>" op)
+                  (lp fp ls (cdr efp-stack))]
+                 [(and (pair? ls) (let ([row (car ls)]) (and (= (get-bfp row) fp) row))) =>
+                  (lambda (row)
+                    (let ([count (get-count row)])
+                      (fprintf op "<span title=\"~:d\" style=\"background-color: ~a\">"
+                        count (colorize count max-count)))
+                    (lp fp (cdr ls) (cons (get-efp row) efp-stack)))]
+                 [else
+                  (let ([c (read-char ip)])
+                    (unless (eof-object? c)
+                      (html:encode op (format "~a" c))
+                      (lp (+ fp 1) ls efp-stack)))]))
+
+              (fprintf op
+                (ct:join ""
+                  "</pre>"
+                  "</body>"
+                  "</html>"))
+
+              (http:respond conn 200 '(("Content-Type" . "text.html")) (get)))
+            #; ;; Plain
+            (http:respond conn 200 '(("Content-Type" . "text.html"))
+              (html->bytevector
+               `(html5
+                 (head
+                  (meta (@ (charset "UTF-8")))
+                  (title ,filename))
+                 (body (@ (style "font-family:monospace"))
+                   (pre ,(utf8->string code))))))
+            ])))]))
+
+  (http:add-server 'http 54321
+    (http:url-handler
+     (<request> open request [method path])
+     (cond
+      [(and (eq? method 'GET)
+            (json:ref pages (string->symbol path) #f)) =>
+       (lambda (h) (http:call-url-handler h))]
+      [else
+       (not-found conn)]))))
+
+(log-file ":memory:")
+(app-sup-spec
+ (append (app-sup-spec)
+   `(#(db ,(lambda () (db:start&link 'db "profile.db3" 'open))
+        permanent 1000 worker))))
+(app:start)
+(printf "Started at http://localhost:~a/\n" (http:get-port-number 'http))
+(swish-start)
