@@ -163,13 +163,14 @@
                          (printf "  ~a: ~a\n" fn (exit-reason->english reason))
                          (vector pk fn #f)]
                         [,code
-                         (let ([sfd (make-source-file-descriptor fn (open-bytevector-input-port code))])
+                         (let* ([sfd (make-source-file-descriptor fn (open-bytevector-input-port code))]
+                                [update? (eqv? (source-file-descriptor-checksum sfd) cs)])
                            (cond
-                            [(eqv? (source-file-descriptor-checksum sfd) cs)
+                            [update?
                              (execute "update dim_source set src_code=? where src_pk=?" code pk)]
                             [else
-                             (printf "  ~a: mismatched checksums\n" fn)]))
-                         (vector pk fn code)])]))
+                             (printf "  ~a: mismatched checksums\n" fn)])
+                           (vector pk fn (and update? code)))])]))
                  rows))])
         (time
          (begin
@@ -177,25 +178,26 @@
             (lambda (row)
               (match row
                 [#(,src ,fn ,code)
-                 (match (try (tokenize (utf8->string code)))
-                   [`(catch ,reason)
-                    (printf "  ~a: ~a\n" fn (exit-reason->english reason))]
-                   [,tokens
-                    (for-each
-                     (lambda (t)
-                       (db:log 'db
-                         (ct:join " "
-                           "insert into stage_token"
-                           "(src_fk,type,value,raw,bfp,efp,err)"
-                           "values (?,?,?,?,?,?,?)")
-                         src
-                         (coerce (token-type t))
-                         (coerce (token-value t))
-                         (coerce (token-raw t))
-                         (token-bfp t)
-                         (token-efp t)
-                         (coerce (token-err t))))
-                     tokens)])]))
+                 (when code
+                   (match (try (tokenize (utf8->string code)))
+                     [`(catch ,reason)
+                      (printf "  ~a: ~a\n" fn (exit-reason->english reason))]
+                     [,tokens
+                      (for-each
+                       (lambda (t)
+                         (db:log 'db
+                           (ct:join " "
+                             "insert into stage_token"
+                             "(src_fk,type,value,raw,bfp,efp,err)"
+                             "values (?,?,?,?,?,?,?)")
+                           src
+                           (coerce (token-type t))
+                           (coerce (token-value t))
+                           (coerce (token-raw t))
+                           (token-bfp t)
+                           (token-efp t)
+                           (coerce (token-err t))))
+                       tokens)]))]))
             rows)
 
            (transaction 'db
