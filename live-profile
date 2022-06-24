@@ -10,6 +10,21 @@
 ;;  - hover over test code in one pane and highlight the product code it exercises in another pane
 ;;  - makes sense that we'd be able to navigate source using info from the Tower if available
 
+;; TODO:
+;; - add summary metrics to /files page
+;; - add line anchors so we can reference specific lines of code with URL #fragments.
+;; - add token color highlighting
+;; - figure out how to compute if a reference is a definition. Can we
+;;   do it during staging?  If so does fact_tokens become fact_refs and
+;;   we add a new fact_defns?
+;; - add go to definition (by clicking on a token)
+;; - add more color palette options for profile data
+;; - flip to websocket/data style?
+;; - add way to add a HTML link to an arbitrary range. Thought here
+;;   being this might enable navigation from (import (foobar)) to
+;;   foobar.ss. It might also be used for "actions", like "fix sort
+;;   order of imports over this range".
+
 (import (indent))
 
 ;; TODO: Eliminate
