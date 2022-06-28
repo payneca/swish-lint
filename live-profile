@@ -109,6 +109,7 @@
             [src_filename text]
             [src_checksum integer]
             [src_code text]        ; TODO: We might prefer a blob here
+            [src_has_code integer "generated always as (case when src_code is null then 0 else 1 end) stored"]
             )
 
           (execute "drop table if exists dim_token")
@@ -370,26 +371,39 @@
                (title "Main Page")
                (link (@ (type "text/css")
                         (rel "stylesheet")
-                        (href "style.css"))))
+                        (href "style.css")))
+               (style
+                "td { text-align: right; }"
+                "td:first-child { text-align: left; }"))
               (body
                ,(navigation-panel "/files" #f obs)
-               (pre
+               (table
+                (tr (td "filename") (td "hits") (td "max-count"))
                 ,@(map
                    (lambda (row)
                      (match row
-                       [#(,src ,filename ,code?)
+                       [#(,src ,filename ,code? ,hits ,max-count)
                         (let ([code? (not (zero? code?))])
-                          `(div
-                            ,(format "~2d: " src)
-                            ,(if code?
-                                 (link filename "/source" src obs)
-                                 filename)))]))
+                          `(tr
+                            (td ,(if code?
+                                     (link filename "/source" src obs)
+                                     filename))
+                            (td ,(format "~:d" hits))
+                            (td ,(format "~:d" max-count))))]))
                    (transaction 'db
-                     (execute
-                      (ct:join " "
-                        "select src_pk,src_filename,src_code is not null"
-                        "from dim_source"
-                        "order by src_filename")))))))))))]
+                     ;; N.B. Strange behavior here if `src_has_code`
+                     ;; is inlined here.
+                     (apply execute
+                       (format
+                        (ct:join " "
+                          "select src_pk, src_filename,src_has_code,count(*),max(count)"
+                          "from fact_profile"
+                          "inner join dim_source on src_pk=src_fk"
+                          "where obs_fk in (~a)"
+                          "group by src_pk, src_filename"
+                          "order by src_filename")
+                        (template obs))
+                       obs))))))))))]
      [/source
       (http:url-handler
        (let ([src (arg->integer (http:get-param 'src params))]
