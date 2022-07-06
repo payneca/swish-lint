@@ -395,7 +395,7 @@
       `(a (@ (href ,url)) ,anchor)))
 
   (define (navigation-panel base-url src obs)
-    `(div
+    `(header (@ (class "navigation"))
       ,(link "files" "/files" #f obs)
       ,@(map
          (lambda (row)
@@ -410,7 +410,8 @@
            (execute
             (ct:join " "
               "select obs_pk, json_extract(obs_meta, '$.note')"
-              "from dim_observation"))))))
+              "from dim_observation"))))
+       (hr)))
 
   (define pages
     (json:make-object
@@ -435,7 +436,7 @@
               (body
                ,(navigation-panel "/files" #f obs)
                (table
-                (tr (td "filename") (td "hits") (td "sites") (td "coverage") (td "max-count"))
+                (tr (th "filename") (th "hits") (th "sites") (th "coverage") (th "max-count"))
                 ,@(map
                    (lambda (row)
                      (match row
@@ -618,6 +619,7 @@
       (http:url-handler
        (define-values (op get) (open-bytevector-output-port (make-utf8-transcoder)))
        (fprintf op "BODY { font-family: monospace; }\n")
+       (fprintf op ".navigation { position:sticky; top:0; background-color:white; }\n")
        (fprintf op ".cov_low { color: #FF0000; }\n")
        (fprintf op ".cov_medium { color: #FF8800; }\n")
        (fprintf op ".cov_high { color: #007F00; }\n")
