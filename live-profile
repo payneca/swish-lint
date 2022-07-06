@@ -316,7 +316,7 @@
 
         (create-index 'fa_pr_obs "fact_profile (obs_fk)")
         (create-index 'fa_pr_rng "fact_profile (rng_fk)")
-        (create-index 'fa_pr_src "fact_profile (src_fk)")
+        (create-index 'fa_pr_src_rng "fact_profile (src_fk,rng_fk)")
 
         (create-index 'fa_to_rng "fact_tokens (rng_fk)")
         (create-index 'fa_to_src "fact_tokens (src_fk)")
