@@ -132,6 +132,8 @@
      (source-table-dump src-table))))
 
 (define (build-database filename meta)
+  (define (bool->db x)
+    (if x 1 0))
   (match-let* ([#(ok ,pid) (db:start&link 'db "profile.db3" 'create)])
     (unlink pid)
     (on-exit (db:stop pid)
@@ -160,7 +162,11 @@
           [raw text]
           [bfp integer]
           [efp integer]
-          [err text])
+          [err text]
+          [prop_number integer]
+          [prop_char integer]
+          [prop_string integer]
+          [prop_comment integer])
 
         (unless (opt 'merge)
           (execute "drop table if exists dim_observation")
@@ -189,7 +195,11 @@
             [tok_type text]
             [tok_value text]
             [tok_raw text]
-            [tok_err text])
+            [tok_err text]
+            [tok_prop_number integer]
+            [tok_prop_char integer]
+            [tok_prop_string integer]
+            [tok_prop_comment integer])
 
           (execute "drop table if exists fact_profile")
           (create-table fact_profile
@@ -233,6 +243,7 @@
            "inner join dim_source on checksum=src_checksum"
            "inner join dim_range on bfp=rng_bfp and efp=rng_efp")))
 
+      #;
       (time
        (begin
          (for-each
@@ -249,15 +260,19 @@
                        (db:log 'db
                          (ct:join " "
                            "insert into stage_token"
-                           "(src_fk,type,value,raw,bfp,efp,err)"
-                           "values (?,?,?,?,?,?,?)")
+                           "(src_fk,type,value,raw,bfp,efp,err,prop_number,prop_char,prop_string,prop_comment)"
+                           "values (?,?,?,?,?,?,?,?,?,?,?)")
                          src
                          (coerce (token-type t))
                          (coerce (token-value t))
                          (coerce (token-raw t))
                          (token-bfp t)
                          (token-efp t)
-                         (coerce (token-err t))))
+                         (coerce (token-err t))
+                         (bool->db (has-prop? t 'number))
+                         (bool->db (has-prop? t 'char))
+                         (bool->db (has-prop? t 'string))
+                         (bool->db (has-prop? t 'comment))))
                      tokens)]))]))
           (transaction 'db
             (execute
@@ -269,9 +284,9 @@
          (transaction 'db
            (execute
             (ct:join " "
-              "insert into dim_token (tok_type,tok_value,tok_raw,tok_err)"
-              "select distinct type,value,raw,err from stage_token"
-              "except select tok_type,tok_value,tok_raw,tok_err from dim_token"))
+              "insert into dim_token (tok_type,tok_value,tok_raw,tok_err,tok_prop_number,tok_prop_char,tok_prop_string,tok_prop_comment)"
+              "select distinct type,value,raw,err,prop_number,prop_char,prop_string,prop_comment from stage_token"
+              "except select tok_type,tok_value,tok_raw,tok_err,tok_prop_number,tok_prop_char,tok_prop_string,tok_prop_comment from dim_token"))
            (execute
             (ct:join " "
               "insert into dim_range (rng_bfp,rng_efp)"
