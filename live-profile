@@ -243,7 +243,6 @@
            "inner join dim_source on checksum=src_checksum"
            "inner join dim_range on bfp=rng_bfp and efp=rng_efp")))
 
-      #;
       (time
        (begin
          (for-each
@@ -279,7 +278,8 @@
              (ct:join " "
                "select src_pk, src_filename, src_code"
                "from dim_source"
-               "where src_code is not null"))))
+               "where src_code is not null"
+               "and src_pk not in (select distinct src_fk from fact_tokens)"))))
 
          (transaction 'db
            (execute
@@ -304,7 +304,7 @@
               "(src_fk, tok_fk, rng_fk)"
               "select src_fk, tok_pk, rng_pk"
               "from stage_token"
-              "inner join dim_token on type=tok_type and value is tok_value and raw=tok_raw and err is tok_err"
+              "inner join dim_token on type=tok_type and value is tok_value and raw=tok_raw and err is tok_err and prop_number=tok_prop_number and prop_char=tok_prop_char and prop_string=tok_prop_string and prop_comment=tok_prop_comment"
               "inner join dim_range on bfp=rng_bfp and efp=rng_efp")))
          ))
 
