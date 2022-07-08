@@ -565,6 +565,7 @@
                 (html->string (navigation-panel "/source" src obs))
                 (html:encode filename))
 
+              #;
               (let lp ([fp 0] [ls data] [efp-stack '()] [leading? #t] [span-stack '()])
                 (cond
                  [(and (pair? efp-stack) (= (car efp-stack) fp))
@@ -605,6 +606,41 @@
                         (html:encode op (format "~a" c))
                         (lp (+ fp 1) ls efp-stack #f span-stack)])))]))
 
+              (let lp ([fp 0] [ls data] [efp-stack '()] [leading? #t] [leading-span? #f])
+                (cond
+                 [(and (pair? efp-stack) (= (car efp-stack) fp))
+                  (when leading-span?
+                    (display-string "</span>" op))
+                  (display-string "</span>" op)
+                  (lp fp ls (cdr efp-stack) leading? #f)]
+                 [(and (pair? ls) (let ([row (car ls)]) (and (= (get-bfp row) fp) row))) =>
+                  (lambda (row)
+                    (when leading-span?
+                      (display-string "</span>" op))
+                    (let ([count (get-count row)])
+                      (fprintf op "<span title=\"~:d\" class=\"~a\">"
+                        count (color-class count max-count)))
+                    (lp fp (cdr ls) (cons (get-efp row) efp-stack) leading? #f))]
+                 [else
+                  (let ([c (read-char ip)])
+                    (unless (eof-object? c)
+                      (cond
+                       [(eq? c #\newline)
+                        (when leading-span?
+                          (display "</span>" file-op))
+                        (html:encode op (format "~a" c))
+                        (lp (+ fp 1) ls efp-stack #t leading-span?)]
+                       [(and leading? (char-whitespace? c))
+                        (unless leading-span?
+                          (display-string "<span class=\"ws\">" op))
+                        (html:encode op (format "~a" c))
+                        (lp (+ fp 1) ls efp-stack #t #t)]
+                       [else
+                        (when leading-span?
+                          (display-string "</span>" op))
+                        (html:encode op (format "~a" c))
+                        (lp (+ fp 1) ls efp-stack #f #f)])))]))
+
               #;
               (let lp ([fp 0] [ls data] [efp-stack '()])
                 (cond
@@ -638,6 +674,7 @@
        (fprintf op ".cov_low { color: #FF0000; }\n")
        (fprintf op ".cov_medium { color: #FF8800; }\n")
        (fprintf op ".cov_high { color: #007F00; }\n")
+       (fprintf op ".ws { background-color:white; }\n")
        ;; 0=gray, 1=red .. 128=yellow
        (fprintf op ".c0 { background-color: #C0C0C0; }\n")
        (do ([i 1 (fx+ i 1)] [g 128 (fx+ g 1)]) ((= g 256))
