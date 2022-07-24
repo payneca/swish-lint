@@ -389,8 +389,11 @@
   (define (template ls)
     (join (map (lambda (x) "?") ls) #\,))
 
-  (define (link anchor base-url src obs-list)
+  (define (link anchor base-url src obs-list cm)
     (let* ([args '()]
+           [args (if cm
+                     (cons (cons 'cm cm) args)
+                     args)]
            [args (if (pair? obs-list)
                      (cons (cons 'obs (join obs-list #\,)) args)
                      args)]
@@ -409,9 +412,9 @@
                        #\&)))])
       `(a (@ (href ,url)) ,anchor)))
 
-  (define (navigation-panel base-url src obs)
+  (define (navigation-panel base-url src obs cm)
     `(header (@ (class "navigation"))
-      ,(link "files" "/files" #f obs)
+      ,(link "files" "/files" #f obs cm)
       ,@(map
          (lambda (row)
            (match row
@@ -420,7 +423,8 @@
                 ,(link note base-url src
                    (if (memv pk obs)
                        (remv pk obs)
-                       (sort < (cons pk obs)))))]))
+                       (sort < (cons pk obs)))
+                   cm))]))
          (transaction 'db
            (execute
             (ct:join " "
@@ -435,7 +439,8 @@
        (http:respond conn 302 `(("Location" . "/files")) '#vu8()))]
      [/files
       (http:url-handler
-       (let ([obs (obs->list (http:find-param 'obs params))])
+       (let ([obs (obs->list (http:find-param 'obs params))]
+             [cm (or (http:find-param 'cm params) "default")])
          (http:respond conn 200 '(("Content-Type" . "text/html"))
            (html->bytevector
             `(html5
@@ -444,12 +449,12 @@
                (title "Main Page")
                (link (@ (type "text/css")
                         (rel "stylesheet")
-                        (href "style.css")))
+                        (href ,(format "style.css?cm=~a" cm))))
                (style
                 "td { text-align: right; }"
                 "td:first-child { text-align: left; }"))
               (body
-               ,(navigation-panel "/files" #f obs)
+               ,(navigation-panel "/files" #f obs cm)
                (table
                 (tr (th "filename") (th "hits") (th "sites") (th "coverage") (th "max-count"))
                 ,@(map
@@ -459,7 +464,7 @@
                         (let ([code? (not (zero? code?))])
                           `(tr
                             (td ,(if code?
-                                     (link filename "/source" src obs)
+                                     (link filename "/source" src obs cm)
                                      filename))
                             (td ,(format "~:d" hits))
                             (td ,(format "~:d" sites))
@@ -495,7 +500,8 @@
      [/source
       (http:url-handler
        (let ([src (arg->integer (http:get-param 'src params))]
-             [obs (obs->list (http:find-param 'obs params))])
+             [obs (obs->list (http:find-param 'obs params))]
+             [cm (or (http:find-param 'cm params) "default")])
          (match (transaction 'db
                   (execute "select src_filename, src_code from dim_source where src_pk=?" src))
            [() (not-found conn)]
@@ -553,16 +559,17 @@
                   "<head>"
                   "<meta charset=\"UTF-8\">"
                   "<title>~a</title>"
-                  "<link type=\"text/css\" rel=\"stylesheet\" href=\"style.css\">"
+                  "<link type=\"text/css\" rel=\"stylesheet\" href=\"style.css?cm=~a\">"
                   "</head>")
-                (html:encode filename))
+                (html:encode filename)
+                (html:encode cm))
               (fprintf op
                 (ct:join ""
                   "<body>"
                   "~a"
                   "<h1>~a</h1>"
                   "<pre>")
-                (html->string (navigation-panel "/source" src obs))
+                (html->string (navigation-panel "/source" src obs cm))
                 (html:encode filename))
 
               #;
@@ -668,18 +675,31 @@
               (http:respond conn 200 '(("Content-Type" . "text/html")) (get)))])))]
      [/style.css
       (http:url-handler
-       (define-values (op get) (open-bytevector-output-port (make-utf8-transcoder)))
-       (fprintf op "BODY { font-family: monospace; }\n")
-       (fprintf op ".navigation { position:sticky; top:0; background-color:white; }\n")
-       (fprintf op ".cov_low { color: #FF0000; }\n")
-       (fprintf op ".cov_medium { color: #FF8800; }\n")
-       (fprintf op ".cov_high { color: #007F00; }\n")
-       (fprintf op ".ws { background-color:white; }\n")
-       ;; 0=gray, 1=red .. 128=yellow
-       (fprintf op ".c0 { background-color: #C0C0C0; }\n")
-       (do ([i 1 (fx+ i 1)] [g 128 (fx+ g 1)]) ((= g 256))
-         (fprintf op ".c~d { background-color: #FF~2,'0x80; }\n" i g))
-       (http:respond conn 200 '(("Content-Type" . "text/css")) (get)))]
+       (let ([cm (or (http:find-param 'cm params) "default")])
+         (define-values (op get) (open-bytevector-output-port (make-utf8-transcoder)))
+         (fprintf op "BODY { font-family: monospace; }\n")
+         (fprintf op ".navigation { position:sticky; top:0; background-color:white; }\n")
+         (fprintf op ".cov_low { color: #FF0000; }\n")
+         (fprintf op ".cov_medium { color: #FF8800; }\n")
+         (fprintf op ".cov_high { color: #007F00; }\n")
+         (fprintf op ".ws { background-color:white; }\n")
+         (match cm
+           ["default"
+            ;; 0=gray, 1=red .. 128=yellow
+            (fprintf op ".c0 { background-color: #C0C0C0; }\n")
+            (do ([i 1 (fx+ i 1)] [g 128 (fx+ g 1)]) ((= g 256))
+              (fprintf op ".c~d { background-color: #FF~2,'0x80; }\n" i g))]
+           ["green"
+            ;; 0=gray, 1=dark green .. 128=bright green
+            (fprintf op ".c0 { background-color: #C0C0C0; }\n")
+            (do ([i 1 (fx+ i 1)] [g 128 (fx+ g 1)]) ((= g 256))
+              (fprintf op ".c~d { background-color: #80~2,'0x80; }\n" i g))]
+           ["zero"
+            ;; 0=red only
+            (fprintf op ".c0 { background-color: #FF8080; }\n")
+            (do ([i 1 (fx+ i 1)] [g 128 (fx+ g 1)]) ((= g 256))
+              (fprintf op ".c~d { background-color: #FFFFFF; }\n" i))])
+         (http:respond conn 200 '(("Content-Type" . "text/css")) (get))))]
      ))
 
   (http:add-server 'http 54321
