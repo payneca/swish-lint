@@ -432,6 +432,31 @@
               "from dim_observation"))))
        (hr)))
 
+  (define (color-class x max-count)
+    (cond
+     [(= x 0) "c0"]
+     [(= max-count 1) "c128"]
+     [else
+      ;; from min to max on a log scale
+      (format "c~d"
+        (+ (inexact->exact
+            (round (* (/ (log x) (log max-count)) 127)))
+           1))]))
+
+  (define (legend-panel max-count)
+    (when max-count
+      `(div (@ (class "legend"))
+         (div (@ (class ,(color-class 0 max-count))) "0")
+         ,@(let lp ([count 1])
+             (if (> count max-count)
+                 '()
+                 (cons
+                  `(div (@ (class ,(color-class count max-count)))
+                     ,(format "~:d" count))
+                  (lp (* count 10)))))
+         (div (@ (class ,(color-class max-count max-count)))
+           ,(format "~:d" max-count)))))
+
   (define pages
     (json:make-object
      [/
@@ -541,17 +566,6 @@
               (define (get-efp row) (vector-ref row 1))
               (define (get-count row) (vector-ref row 2))
 
-              (define (color-class x max-count)
-                (cond
-                 [(= x 0) "c0"]
-                 [(= max-count 1) "c128"]
-                 [else
-                  ;; from min to max on a log scale
-                  (format "c~d"
-                    (+ (inexact->exact
-                        (round (* (/ (log x) (log max-count)) 127)))
-                       1))]))
-
               (fprintf op
                 (ct:join ""
                   "<!DOCTYPE html>"
@@ -567,9 +581,11 @@
                 (ct:join ""
                   "<body>"
                   "~a"
+                  "~a"
                   "<h1>~a</h1>"
                   "<pre>")
                 (html->string (navigation-panel "/source" src obs cm))
+                (html->string (legend-panel max-count))
                 (html:encode filename))
 
               #;
@@ -730,6 +746,7 @@
                [fg "black"])
            (fprintf op "BODY { font-family: monospace; background-color: ~a; color: ~a; }\n" bg fg)
            (fprintf op ".navigation { position:sticky; top:0; background-color:~a; }\n" bg)
+           (fprintf op ".legend { position:sticky; top:0; float:right; text-align:right; }\n")
            (fprintf op ".cov_low { color: #FF0000; }\n")
            (fprintf op ".cov_medium { color: #FF8800; }\n")
            (fprintf op ".cov_high { color: #007F00; }\n")
