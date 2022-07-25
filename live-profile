@@ -676,29 +676,86 @@
      [/style.css
       (http:url-handler
        (let ([cm (or (http:find-param 'cm params) "default")])
+         (define (make-linear-transform in-min in-max out-min out-max)
+           (let ([delta (/ (- out-max out-min) (- in-max in-min))])
+             (lambda (x)
+               (+ (* (- x in-min) delta) out-min))))
+         (define (hue&chroma r g b)
+           ;; r,g,b = [0, 1]
+           (let* ([m (inexact (min r g b))]
+                  [M (inexact (max r g b))]
+                  [c (- M m)]
+                  [hp (if (= c 0)
+                          0
+                          (cond
+                           [(= M r) (mod (/ (- g b) c) 6)]
+                           [(= M g) (+ (/ (- b r) c) 2)]
+                           [(= M b) (+ (/ (- r g) c) 4)]
+                           [else (errorf 'hue&chroma "undefined hue")]))]
+                  [h (* hp 60)])
+             (values h c m M)))
+         (define (rgb->hsl r g b)
+           (let-values ([(h c m M) (hue&chroma r g b)])
+             (let* ([l (/ (+ M m) 2)]
+                    [s (if (= c 0)
+                           0
+                           (/ c (- 1 (abs (- (* 2 l) 1)))))])
+               (values h s l))))
+         (define (fg r g b)
+           (let-values ([(h s l) (rgb->hsl r g b)])
+             (if (<= l 0.51)
+                 "white"
+                 "black")))
+         (define (as-byte x)
+           (exact (min (truncate (* (max 0 x) 255)) 255)))
+         (define (rgb->html r g b)
+           ;; r,g,b = [0, 1]
+           (format "#~2,'0x~2,'0x~2,'0x"
+             (as-byte r)
+             (as-byte g)
+             (as-byte b)))
+         (define (output-color-class i r g b)
+           (fprintf op ".c~d { background-color: ~a; color: ~a}\n"
+             i
+             (rgb->html r g b)
+             (fg r g b)))
+         (define (output-gradient op from to fr fg fb tr tg tb)
+           (let ([rt (make-linear-transform from to fr tr)]
+                 [gt (make-linear-transform from to fg tg)]
+                 [bt (make-linear-transform from to fb tb)])
+             (do ([i from (fx+ i 1)]) ((> i to))
+               (output-color-class i (rt i) (gt i) (bt i)))))
          (define-values (op get) (open-bytevector-output-port (make-utf8-transcoder)))
-         (fprintf op "BODY { font-family: monospace; }\n")
-         (fprintf op ".navigation { position:sticky; top:0; background-color:white; }\n")
-         (fprintf op ".cov_low { color: #FF0000; }\n")
-         (fprintf op ".cov_medium { color: #FF8800; }\n")
-         (fprintf op ".cov_high { color: #007F00; }\n")
-         (fprintf op ".ws { background-color:white; }\n")
+         (let ([bg "white"]
+               [fg "black"])
+           (fprintf op "BODY { font-family: monospace; background-color: ~a; color: ~a; }\n" bg fg)
+           (fprintf op ".navigation { position:sticky; top:0; background-color:~a; }\n" bg)
+           (fprintf op ".cov_low { color: #FF0000; }\n")
+           (fprintf op ".cov_medium { color: #FF8800; }\n")
+           (fprintf op ".cov_high { color: #007F00; }\n")
+           (fprintf op ".ws { background-color: ~a; }\n" bg))
          (match cm
            ["default"
-            ;; 0=gray, 1=red .. 128=yellow
-            (fprintf op ".c0 { background-color: #C0C0C0; }\n")
-            (do ([i 1 (fx+ i 1)] [g 128 (fx+ g 1)]) ((= g 256))
-              (fprintf op ".c~d { background-color: #FF~2,'0x80; }\n" i g))]
+            ;; 0=gray, red .. yellow
+            (output-color-class 0 .75 .75 .75)
+            (output-gradient op 1 128 1.0 0.5 0.5 1.0 1.0 0.5)]
            ["green"
-            ;; 0=gray, 1=dark green .. 128=bright green
-            (fprintf op ".c0 { background-color: #C0C0C0; }\n")
-            (do ([i 1 (fx+ i 1)] [g 128 (fx+ g 1)]) ((= g 256))
-              (fprintf op ".c~d { background-color: #80~2,'0x80; }\n" i g))]
+            ;; 0=gray, dark green .. bright green
+            (output-color-class 0 .75 .75 .75)
+            (output-gradient op 1 128 0.25 0.5 0.25 0.5 1.0 0.5)]
+           ["blue"
+            ;; 0=gray, blue .. yellow
+            (output-color-class 0 .75 .75 .75)
+            (output-gradient op 1 128 0.25 0.5 1.0 1.0 1.0 0.5)]
+           ["purple"
+            ;; 0=gray, purple .. yellow
+            (output-color-class 0 .75 .75 .75)
+            (output-gradient op 1 128 0.75 0.25 0.75 1.0 1.0 0.5)]
            ["zero"
             ;; 0=red only
-            (fprintf op ".c0 { background-color: #FF8080; }\n")
+            (output-color-class 0 1 .5 .5)
             (do ([i 1 (fx+ i 1)] [g 128 (fx+ g 1)]) ((= g 256))
-              (fprintf op ".c~d { background-color: #FFFFFF; }\n" i))])
+              (output-color-class i 1 1 1))])
          (http:respond conn 200 '(("Content-Type" . "text/css")) (get))))]
      ))
 
