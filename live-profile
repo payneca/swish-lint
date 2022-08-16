@@ -629,6 +629,76 @@
                         (html:encode op (format "~a" c))
                         (lp (+ fp 1) ls efp-stack #f span-stack)])))]))
 
+              (let ()
+                (define get-next
+                  (generator
+                   (let lp ([fp 0] [line 1] [ls data] [stack '()] [start-of-line? #t])
+                     (cond
+                      [(and (pair? stack) (let ([row (car stack)]) (and (= (get-efp (car stack)) fp) row))) =>
+                       (lambda (row)
+                         (yield 'pop-count)
+                         (lp fp line ls (cdr stack) start-of-line?))]
+                      [(and (pair? ls) (let ([row (car ls)]) (and (= (get-bfp row) fp) row))) =>
+                       (lambda (row)
+                         (yield `#(push-count ,(get-count row)))
+                         (lp fp line (cdr ls) (cons row stack) start-of-line?))]
+                      [else
+                       (let ([c (read-char ip)])
+                         (cond
+                          [(eof-object? c) (void)]
+                          [(eq? c #\newline)
+                           (when start-of-line?
+                             (yield `#(line ,line)))
+                           (yield c)
+                           (lp (+ fp 1) (+ line 1) ls stack #t)]
+                          [else
+                           (when start-of-line?
+                             (yield `#(line ,line)))
+                           (yield c)
+                           (lp (+ fp 1) line ls stack #f)]))]))
+                   (let lp ()
+                     (yield (eof-object))
+                     (lp))))
+
+                (define (start-color-span count)
+                  (fprintf op "<span title=\"~:d\" class=\"~a\">"
+                    count
+                    (color-class count max-count)))
+
+                (fprintf op "<table class=\"code\">\n")
+                (let lp ([counts '()] [leading? #t])
+                  (match (get-next)
+                    [#!eof (void)]
+                    [pop-count
+                     (when (pair? counts)
+                       (fprintf op "</span>"))
+                     (let ([counts (cdr counts)])
+                       (when (pair? counts)
+                         (start-color-span (car counts)))
+                       (lp counts leading?))]
+                    [#(push-count ,count)
+                     (start-color-span count)
+                     (lp (cons count counts) leading?)]
+                    [#(line ,line)
+                     (fprintf op "<tr><td>~a</td><td id=\"L~a\">" line line)
+                     (lp counts leading?)]
+                    [#\newline
+                     (when (pair? counts)
+                       (fprintf op "</span>"))
+                     (fprintf op "</td></tr>\n")
+                     (lp counts #t)]
+                    [,c
+                     (guard (and leading? (char-whitespace? c)))
+                     (html:encode op (format "~a" c))
+                     (lp counts leading?)]
+                    [,c
+                     (when (and leading? (pair? counts))
+                       (start-color-span (car counts)))
+                     (html:encode op (format "~a" c))
+                     (lp counts #f)]))
+                (fprintf op "</table>\n"))
+
+              #;
               (let lp ([fp 0] [ls data] [efp-stack '()] [leading? #t] [leading-span? #f])
                 (cond
                  [(and (pair? efp-stack) (= (car efp-stack) fp))
@@ -745,6 +815,9 @@
          (let ([bg "white"]
                [fg "black"])
            (fprintf op "BODY { font-family: monospace; background-color: ~a; color: ~a; }\n" bg fg)
+           (fprintf op "table.code { padding:0; border-spacing:0; }\n")
+           (fprintf op "table.code td { padding-top:0; padding-bottom:0; }\n")
+           (fprintf op "table.code td:nth-child(1) { text-align: right; color:gray; padding-left: 10px; padding-right:10px; }\n")
            (fprintf op ".navigation { position:sticky; top:0; background-color:~a; }\n" bg)
            (fprintf op ".legend { position:sticky; top:0; float:right; text-align:right; }\n")
            (fprintf op ".cov_low { color: #FF0000; }\n")
