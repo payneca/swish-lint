@@ -420,6 +420,10 @@
            (match row
              [#(,pk ,note)
               `(div
+                ;; Heavy check marks and non-breaking spaces ahead.
+                ,(if (memv pk obs)
+                     (format "~c~c" (integer->char #x2714)(integer->char #x00A0))
+                     (format "~c~c" (integer->char #x00A0) (integer->char #x00A0)))
                 ,(link note base-url src
                    (if (memv pk obs)
                        (remv pk obs)
