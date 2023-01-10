@@ -560,8 +560,20 @@ order by rank desc, count desc, candidates.name asc"
                           (scalar (execute "select count(*) from refs"))
                           (scalar (execute "select count(*) from files"))
                           (execute "select datetime(timestamp/1000,'unixepoch','localtime'),path from roots order by timestamp desc")
-                          (execute "select datetime(timestamp/1000,'unixepoch','localtime'),pid,message from events order by rowid desc limit ?" limit)))
-                  [(,keywords ,defns ,refs ,files ,roots ,log)
+                          (execute "select datetime(timestamp/1000,'unixepoch','localtime'),pid,message from events order by rowid desc limit ?" limit)
+
+                          (execute
+                           (ct:join #\space
+                             "select [op], COUNT(*), MIN([time]), MAX([time]), AVG([time])"
+                             "from"
+                             "(select json_extract(message, '$._op_') as [op]"
+                             " ,json_extract(message, '$.time') as [time]"
+                             " from events"
+                             " where json_valid(message)) A"
+                             "where [time] is not NULL"
+                             "group by [op]"
+                             "order by [op]"))))
+                  [(,keywords ,defns ,refs ,files ,roots ,log ,stats)
                    (http:respond conn 200 '(("Content-Type" . "text/html"))
                      (html->bytevector
                       `(html5
@@ -592,6 +604,26 @@ order by rank desc, count desc, candidates.name asc"
                                  [#(,date ,pid ,message)
                                   (format "~a ~a ~a\n" date pid message)]))
                              log))
+                         (table (@ (style "text-align:right;"))
+                           (thead
+                            (tr
+                             (th "operation")
+                             (th "count")
+                             (th "min")
+                             (th "max")
+                             (th "avg")))
+                           (tbody
+                            ,@(map
+                               (lambda (row)
+                                 (match row
+                                   [#(,op ,count ,min ,max ,avg)
+                                    `(tr
+                                      (td ,op)
+                                      (td ,(format "~:d" count))
+                                      (td ,(format "~:d" min))
+                                      (td ,(format "~:d" max))
+                                      (td ,(format "~,3f" avg)))]))
+                               stats)))
                          (hr)
                          (pre ,(versions->string))))))]))]
              ["/tower"
