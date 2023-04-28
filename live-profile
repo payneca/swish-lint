@@ -819,7 +819,7 @@
          (let ([bg "white"]
                [fg "black"])
            (fprintf op "BODY { font-family: monospace; background-color: ~a; color: ~a; }\n" bg fg)
-           (fprintf op "table.code { padding:0; border-spacing:0; }\n")
+           (fprintf op "table.code { padding:0; border-spacing:0; white-space: pre; }\n")
            (fprintf op "table.code td { padding-top:0; padding-bottom:0; }\n")
            (fprintf op
              (ct:join " "
@@ -834,7 +834,7 @@
                "user-select: none;"
                "}\n"))
            (fprintf op ".navigation { position:sticky; top:0; background-color:~a; }\n" bg)
-           (fprintf op ".legend { position:sticky; top:0; float:right; text-align:right; }\n")
+           (fprintf op ".legend { position:sticky; top:0; float:right; text-align:right; height: 0px; }\n")
            (fprintf op ".cov_low { color: #FF0000; }\n")
            (fprintf op ".cov_medium { color: #FF8800; }\n")
            (fprintf op ".cov_high { color: #007F00; }\n")
