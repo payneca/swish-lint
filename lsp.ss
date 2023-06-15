@@ -228,8 +228,28 @@
     (match (try
             (let ([fp (line/char->fp table line1 col1)])
               (let-values ([(type value bfp efp) (read-token-near/fp code fp)])
-                (and (eq? type 'atomic)
-                     (bfp/efp->lsp-range table bfp efp)))))
+                (cond
+                 [(eq? type 'atomic)
+                  (bfp/efp->lsp-range table bfp efp)]
+                 ;; This is neat, but may be overzealous
+                 #;
+                 [(eq? type 'lparen)
+                  (match (try
+                          (let ([sfd (make-source-file-descriptor (gensym->unique-string (gensym))
+                                       (open-bytevector-input-port '#vu8()))]
+                                [ip (open-string-input-port code)])
+                            (set-port-position! ip fp)
+                            (let*-values ([(x efp) (get-datum/annotations ip sfd fp)]
+                                          [(end-line ec) (fp->line/char table efp)])
+                              ;; If the expression is all on the same line, build the range.
+                              (and (= line1 end-line)
+                                   (bfp/efp->lsp-range table fp efp)))))
+                    [`(catch ,reason)
+                     (trace-expr
+                      `(find-range/datum ,line1 ,col1 => ,(exit-reason->english reason)))
+                     #f]
+                    [,result result])]
+                 [else #f]))))
       [`(catch ,reason)
        (trace-expr
         `(find-range ,line1 ,col1 => ,(exit-reason->english reason)))
