@@ -35,6 +35,7 @@
    walk-annotations
    walk-defns
    walk-defns-re
+   walk-foldable
    walk-refs
    walk-refs-re
    )
@@ -260,4 +261,23 @@
            (guard (symbol? name))
            (proc table name source)]
           [,_ (void)]))))
+
+  (define (walk-foldable annotated-code proc)
+    (let ([seen (make-eq-hashtable)])
+      (let walk ([x annotated-code])
+        (cond
+         [(pair? x)
+          (walk (car x))
+          (walk (cdr x))]
+         [(vector? x)
+          (do ([i 0 (+ i 1)]) ((= i (vector-length x)))
+            (walk (vector-ref x i)))]
+         [(annotation? x)
+          (let ([cell (eq-hashtable-cell seen x #f)])
+            (unless (cdr cell)
+              (set-cdr! cell #t)
+              (let ([expr (annotation-expression x)])
+                (when (pair? expr)
+                  (proc (annotation-source x)))
+                (walk expr))))]))))
   )

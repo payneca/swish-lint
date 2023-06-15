@@ -452,6 +452,26 @@
                     acc)
                    acc))))))))
 
+  (define (get-folding-ranges doc)
+    (trace-time 'folding-ranges
+      (let ([text (doc:get-text doc)])
+        (match (try (read-code text))
+          [`(catch ,reason) '()]
+          [,annotated-code
+           (let ([result '()]
+                 [source-table (make-code-lookup-table text)])
+             (walk-foldable annotated-code
+               (lambda (source)
+                 (let ([sline (fp->line source-table (source-object-bfp source))]
+                       [eline (fp->line source-table (source-object-efp source))])
+                   (set! result
+                     (cons
+                      (json:make-object
+                       [startLine (- sline 1)] ; LSP is 0-based
+                       [endLine (- eline 1)])  ; LSP is 0-based
+                      result)))))
+             (reverse result))]))))
+
   (define (keep-file? fn)
     (let ([ext (path-extension fn)])
       (or (member ext '("ss" "ms"))
@@ -640,6 +660,7 @@
                   [hoverProvider #f]
                   [completionProvider #t]
                   [definitionProvider #t]
+                  [foldingRangeProvider #t]
                   [referencesProvider #t]
                   [documentHighlightProvider #t]
                   [documentFormattingProvider #t]
@@ -703,6 +724,13 @@
             [(ht:ref ($state uri->doc) uri #f) =>
              (lambda (doc)
                `#(ok ,(indent-range doc range options) ,state))]
+            [else `#(ok () ,state)]))]
+        ["textDocument/foldingRange"
+         (let ([uri (json:get params '(textDocument uri))])
+           (cond
+            [(ht:ref ($state uri->doc) uri #f) =>
+             (lambda (doc)
+               `#(ok ,(get-folding-ranges doc) ,state))]
             [else `#(ok () ,state)]))]
         ["shutdown"
          (set! shutdown-requested? #t)
