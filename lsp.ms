@@ -1131,6 +1131,35 @@
 
          'ok)))))
 
+(isolate-mat folding-ranges ()
+  (define (get-folding-ranges uri)
+    (map
+     (lambda (r) (list (json:get r 'startLine) (json:get r 'endLine)))
+     (rpc-client:call 'rpc
+       (json:make-object
+        [jsonrpc "2.0"]
+        [method "textDocument/foldingRange"]
+        [params
+         (json:make-object
+          [textDocument
+           (json:make-object
+            [uri uri])])]))))
+  (let ([rpc (start-lsp-server #f)])
+    (on-exit (stop-lsp-server rpc)
+      (let ([uri "file:///tmp/foo.ss"])
+        (did-open uri
+          (code
+           "(define (f x)"
+           "  (let ([y (+ x 1)])"
+           "    (* y"
+           "       2)))"))
+        ;; Expressions on a single line are not foldable.
+        (match-let*
+         ([((0 3) (1 3) (2 3)) (get-folding-ranges uri)])
+         'ok)
+        (did-close uri)
+        'ok))))
+
 (isolate-mat semver ()
   ;; from https://semver.org/#is-there-a-suggested-regular-expression-regex-to-check-a-semver-string
   (define pat (re "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+([0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?$"))
