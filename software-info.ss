@@ -30,14 +30,13 @@
    (swish imports)
    )
   (define (software-info:install)
+    (define (warn fn)
+      (warningf 'software-info.ss "file ~s not found at compile time" fn)
+      #f)
     (define key 'swish-lint)
     (software-product-name key "Swish Lint")
-    (software-revision key
-      (include-line "git.revision"
-        (lambda (fn)
-          (warningf 'software-info.ss "file ~s not found at compile time" fn)
-          #f)))
-    (software-version key "1.4.0"))
+    (software-revision key (include-line "git.revision" warn))
+    (software-version key (include-line "git.tag" warn)))
 
   (define (output-version op key)
     (fprintf op "~11@a~@[ ~6@a~]~@[ (~a)~]\n"

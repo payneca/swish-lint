@@ -6,6 +6,7 @@
 *~
 coverage.html
 git.revision
+git.tag
 mat-actual/
 mat-expected/
 mat-report.html
@@ -14,3 +15,4 @@ static-keywords
 swish-lint
 swish-lint.boot
 swish-lint.exe
+swish.info

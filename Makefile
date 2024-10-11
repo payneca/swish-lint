@@ -38,6 +38,18 @@ prepare-source:
 	else \
 	  mv git.revision.tmp git.revision; touch software-info.ss; echo "git.revision changed"; \
 	fi
+	@git describe --tags --dirty | sed -E 's/^v//; s/-g[0-9a-f]+//' > git.tag.tmp
+	@if cmp --quiet git.tag git.tag.tmp; then \
+	  rm git.tag.tmp; \
+	else \
+	  mv git.tag.tmp git.tag; touch software-info.ss; echo "git.tag changed"; \
+	fi
+	@echo '(json:pretty (software-info))' | swish -q > swish.info.tmp
+	@if cmp --quiet swish.info swish.info.tmp; then \
+	  rm swish.info.tmp; \
+	else \
+	  mv swish.info.tmp swish.info; touch software-info.ss; echo "swish.info changed"; \
+	fi
 
 install: all
 	install -d ${INSTALLROOT}
@@ -49,7 +61,7 @@ ifeq (Windows_NT,${OS})
 endif
 
 clean:
-	rm -f git.revision
+	rm -f git.revision git.tag swish.info
 	rm -f swish-lint${EXESUFFIX} swish-lint.boot
 	rm -f *.{so,mo,wpo,sop,ss.html}
 	rm -f testing/*.{so,mo,wpo,sop,ss.html}
