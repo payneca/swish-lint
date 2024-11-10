@@ -628,6 +628,46 @@ order by rank desc, count desc, candidates.name asc"
                          (pre ,(versions->string))))))]))]
              ["/tower"
               (ws:upgrade conn request (spawn&link client))]
+             ["/wordcounts"
+              (let* ([root-fk (http:find-param "root" params)]
+                     [root-fk (and root-fk (string->number root-fk))]
+                     [limit (http:find-param "limit" params)]
+                     [limit (and limit (string->number limit))]
+                     [limit (or limit 250)])
+                (http:respond conn 200 '(("Access-Control-Allow-Origin" . "*")
+                                         ("Content-Type" . "application/json"))
+                  (let-values ([(op get) (open-bytevector-output-port (make-utf8-transcoder))])
+                    (write-char #\{ op)
+                    (transaction 'log-db
+                      (let ([thunk
+                             ;; If root-fk is false, disarm the where
+                             ;; clause. Otherwise, get only the
+                             ;; relevant values.
+                             (lazy-execute
+                              (ct:join #\space
+                                "select distinct name, count(*) as num"
+                                "from refs"
+                                "where 1=? or root_fk=?"
+                                "group by name"
+                                "order by num desc, name asc"
+                                "limit ?")
+                              (if root-fk 0 1)
+                              (or root-fk 0)
+                              limit)])
+                        (let lp ([i 0])
+                          (cond
+                           [(thunk) =>
+                            (lambda (row)
+                              (match row
+                                [#(,name ,count)
+                                 (unless (zero? i)
+                                   (write-char #\, op))
+                                 (json:write op name)
+                                 (write-char #\: op)
+                                 (json:write op count)
+                                 (lp (+ i 1))]))]))))
+                    (write-char #\} op)
+                    (get))))]
              [,_ #f])))))
 
   (define (tower:start-server verbose tower-db port-number)
