@@ -24,6 +24,7 @@
 (library (indent)
   (export
    fold-indent
+   generator
    has-prop?
    indent
    indent-tokens
@@ -37,6 +38,7 @@
    token-type
    token-value
    tokenize
+   yield
    )
   (import
    (chezscheme)
