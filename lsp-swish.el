@@ -1,3 +1,5 @@
+;;; lsp-swish.el --- Swish-Lint configuration -*- lexical-binding: t; -*-
+;;;
 ;;; Copyright 2020 Beckman Coulter, Inc.
 ;;;
 ;;; Permission is hereby granted, free of charge, to any person
@@ -22,6 +24,12 @@
 
 (require 'lsp-mode)
 
+(defgroup lsp-swish nil
+  "LSP support for Swish and Chez Scheme, using Swish-Lint."
+  :group 'lsp-mode
+  :link '(url-link "https://github.com/becls/swish-lint")
+  :prefix "lsp-swish-")
+
 (defun swish-indent-sexp ()
   "Indent each line of the sexp starting just after point."
   (interactive)
@@ -42,13 +50,82 @@
 
 (add-to-list 'lsp-language-id-configuration '(scheme-mode . "scheme"))
 
+(defgroup lsp-swish-semantic-tokens nil
+  "Semantic tokens from Swish-Lint."
+  :group 'lsp-swish
+  :prefix "lsp-swish-")
+
+(defface lsp-swish-internal-modifier-face
+  '((t :inherit default))
+  "Face for the `internal' modifier, which marks a #% primitive."
+  :group 'lsp-swish-semantic-tokens)
+
+(defface lsp-swish-optimize2-modifier-face
+  '((t :inherit default))
+  "Face for the `optimize2' modifier, which marks a #2% primitive."
+  :group 'lsp-swish-semantic-tokens)
+
+(defface lsp-swish-optimize3-modifier-face
+  '((t :inherit default))
+  "Face for the `optimize3' modifier, which marks a #3% primitive."
+  :group 'lsp-swish-semantic-tokens)
+
+(defface lsp-swish-side-effect-modifier-face
+  '((t :inherit default))
+  "Face for the `side-effect' modifier, which marks a name ending in !."
+  :group 'lsp-swish-semantic-tokens)
+
+(defcustom lsp-swish-semantic-token-faces
+  '(("comment" . lsp-face-semhl-comment)
+    ("function" . lsp-face-semhl-function)
+    ("keyword" . lsp-face-semhl-keyword)
+    ("macro" . lsp-face-semhl-macro)
+    ("number" . lsp-face-semhl-number)
+    ("regexp" . lsp-face-semhl-regexp)
+    ("string" . lsp-face-semhl-string)
+    ("type" . lsp-face-semhl-type)
+    ("variable" . lsp-face-semhl-variable))
+  "Faces for the semantic token types that Swish-Lint reports.
+Set this before loading `lsp-swish'."
+  :type '(alist :key-type string :value-type face)
+  :group 'lsp-swish-semantic-tokens)
+
+(defcustom lsp-swish-semantic-token-modifier-faces
+  '(("internal" . lsp-swish-internal-modifier-face)
+    ("optimize2" . lsp-swish-optimize2-modifier-face)
+    ("optimize3" . lsp-swish-optimize3-modifier-face)
+    ("side-effect" . lsp-swish-side-effect-modifier-face))
+  "Faces for the semantic token modifiers that Swish-Lint reports.
+Set this before loading `lsp-swish'."
+  :type '(alist :key-type string :value-type face)
+  :group 'lsp-swish-semantic-tokens)
+
+(lsp-defcustom lsp-swish-semtok-mode "full"
+  "Which semantic tokens Swish-Lint reports.
+\"full\" reports every token, and \"no-modifiers\" leaves out the tokens
+that have modifiers."
+  :type '(choice
+          (const "no-modifiers")
+          (const "full"))
+  :group 'lsp-swish-semantic-tokens
+  :lsp-path "swish.semtok-mode")
+
 (lsp-register-client
  (make-lsp-client
   :new-connection (lsp-stdio-connection
                    '("swish-lint" "--lsp"))
   :major-modes '(scheme-mode)
   :server-id 'swish-ls
-  ))
+  :initialized-fn (lambda (workspace)
+                    (with-lsp-workspace workspace
+                      (lsp--set-configuration
+                       (lsp-configuration-section "swish"))))
+  :synchronize-sections '("swish")
+  :semantic-tokens-faces-overrides
+  `(:discard-default-modifiers t
+    :discard-default-types t
+    :modifiers ,lsp-swish-semantic-token-modifier-faces
+    :types ,lsp-swish-semantic-token-faces)))
 
 (add-hook 'scheme-mode-hook #'lsp)
 
