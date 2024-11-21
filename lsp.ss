@@ -40,6 +40,7 @@
    (keywords)
    (progress)
    (read)
+   (semtok)
    (software-info)
    (swish imports)
    (tower-client)
@@ -423,6 +424,17 @@
                     acc)
                    acc))))))))
 
+  (define (get-semantic-tokens doc uri range)
+    (trace-time 'semantic-tokens
+      (match (try
+              (let ([start (or (and range (json:ref range '(start line) #f)) 0)]
+                    [end (or (and range (json:ref range '(end line) #f)) (most-positive-fixnum))])
+                (semtok:encode (doc:get-text doc) start end)))
+        [`(catch ,reason)
+         (trace-expr `(semantic-tokens => ,(exit-reason->english reason)))
+         '()]
+        [,data (json:make-object [data data])])))
+
   (define (keep-file? fn)
     (let ([ext (path-extension fn)])
       (or (member ext '("ss" "ms"))
@@ -612,6 +624,14 @@
                   [completionProvider #t]
                   [definitionProvider #t]
                   [referencesProvider #t]
+                  [semanticTokensProvider
+                   (json:make-object
+                    [range #t]
+                    [full #t]
+                    [legend
+                     (json:make-object
+                      [tokenTypes (map symbol->string (semtok:types-list))]
+                      [tokenModifiers (map symbol->string (semtok:modifiers-list))])])]
                   [documentHighlightProvider #t]
                   [documentFormattingProvider #t]
                   [documentRangeFormattingProvider #t]
@@ -674,6 +694,21 @@
             [(ht:ref ($state uri->doc) uri #f) =>
              (lambda (doc)
                `#(ok ,(indent-range doc range options) ,state))]
+            [else `#(ok () ,state)]))]
+        ["textDocument/semanticTokens/range"
+         (let ([uri (json:get params '(textDocument uri))]
+               [range (json:get params 'range)])
+           (cond
+            [(ht:ref ($state uri->doc) uri #f) =>
+             (lambda (doc)
+               `#(spawn ,(lambda () (get-semantic-tokens doc uri range)) ,state))]
+            [else `#(ok () ,state)]))]
+        ["textDocument/semanticTokens/full"
+         (let ([uri (json:get params '(textDocument uri))])
+           (cond
+            [(ht:ref ($state uri->doc) uri #f) =>
+             (lambda (doc)
+               `#(spawn ,(lambda () (get-semantic-tokens doc uri #f)) ,state))]
             [else `#(ok () ,state)]))]
         ["shutdown"
          (set! shutdown-requested? #t)
