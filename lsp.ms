@@ -790,6 +790,87 @@
         (did-close uri)
         'ok))))
 
+(isolate-mat semantic-tokens ()
+  (define (get-semantic-tokens uri)
+    (json:get
+     (rpc-client:call 'rpc
+       (json:make-object
+        [jsonrpc "2.0"]
+        [method "textDocument/semanticTokens/full"]
+        [params
+         (json:make-object
+          [textDocument
+           (json:make-object
+            [uri uri])])]))
+     'data))
+  (define (did-change-configuration settings)
+    (rpc-client:notify 'rpc
+      (json:make-object
+       [jsonrpc "2.0"]
+       [method "workspace/didChangeConfiguration"]
+       [params (json:make-object [settings settings])])))
+  (define (semtok-mode mode)
+    (json:make-object [swish (json:make-object [semtok-mode mode])]))
+  (define (capture-refresh)
+    (rpc-client:set-event-handler 'rpc 'refresh
+      (lambda (event)
+        (and (equal? (json:ref event 'method #f)
+               "workspace/semanticTokens/refresh")
+             `#(refresh ,(json:get event 'id))))
+      self)
+    (lambda ()
+      (receive (after 5000 (throw 'no-refresh))
+        [#(refresh ,id) id])))
+  (let ([rpc (start-lsp-server #f)])
+    (on-exit (stop-lsp-server rpc)
+      (define wait-for-refresh (capture-refresh))
+      ;; The result for an unknown document is null, not an array.
+      (assert
+       (eq? json-null
+         (rpc-client:call 'rpc
+           (json:make-object
+            [jsonrpc "2.0"]
+            [method "textDocument/semanticTokens/full"]
+            [params
+             (json:make-object
+              [textDocument
+               (json:make-object
+                [uri "file:///tmp/does-not-exist.ss"])])]))))
+      (let ([uri "file:///tmp/foo.ss"])
+        (did-open uri "(set! foo 12)")
+        (match-let*
+         ([,full '(0 1 4 1 8 0 9 2 4 0)]
+          [,no-modifiers '(0 10 2 4 0)]
+          [,@full (get-semantic-tokens uri)]
+          [,_ (did-change-configuration (semtok-mode "no-modifiers"))]
+          [,id1 (wait-for-refresh)]
+          [,@no-modifiers (get-semantic-tokens uri)]
+          [,_ (did-change-configuration (semtok-mode "full"))]
+          [,id2 (wait-for-refresh)]
+          [,@full (get-semantic-tokens uri)]
+          ;; Each refresh request has a distinct id.
+          [#f (equal? id1 id2)]
+          ;; A response with an unknown id is ignored.
+          [,_ (rpc-client:notify 'rpc
+                (json:make-object
+                 [jsonrpc "2.0"]
+                 [id "not-a-request-id"]
+                 [result json-null]))]
+          [,@full (get-semantic-tokens uri)]
+          ;; Settings without a valid semtok-mode use the default mode
+          ;; rather than breaking semantic tokens.
+          [,_ (did-change-configuration (json:make-object))]
+          [,@full (get-semantic-tokens uri)]
+          [,_ (did-change-configuration (semtok-mode "no-modifiers"))]
+          [,_ (wait-for-refresh)]
+          [,@no-modifiers (get-semantic-tokens uri)]
+          [,_ (did-change-configuration (semtok-mode "bogus"))]
+          [,_ (wait-for-refresh)]
+          [,@full (get-semantic-tokens uri)])
+         'ok)
+        (did-close uri)
+        'ok))))
+
 (isolate-mat semver ()
   ;; from https://semver.org/#is-there-a-suggested-regular-expression-regex-to-check-a-semver-string
   (define pat (re "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+([0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?$"))
