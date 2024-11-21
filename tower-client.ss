@@ -25,6 +25,7 @@
   (export
    abs-path->uri
    tower-client:call
+   tower-client:get-code-lens
    tower-client:get-completions
    tower-client:get-definitions
    tower-client:get-local-references
@@ -212,6 +213,14 @@
 
   (define (tower-client:cast msg)
     (gen-server:cast 'tower-client `#(cast ,msg)))
+
+  (define (tower-client:get-code-lens filename)
+    (tower-client:call
+     (json:make-object
+      [method "get-code-lens"]
+      [params
+       (json:make-object
+        [filename filename])])))
 
   (define (tower-client:get-completions filename line char prefix)
     (tower-client:call

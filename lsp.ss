@@ -472,16 +472,20 @@
                       result)))))
              (reverse result))]))))
 
-  (define (get-code-lens doc)
+  (define (get-code-lens doc uri)
     (trace-time 'code-lens
-      (list
-       (json:make-object
-        [command
-         (json:make-object
-          [title "🔥This is fire!🔥"]
-          [command "no-op"])]
-        [range (->lsp-range `#(range 49 12 49 ,(+ 12 13)))] ; lsp:read-loop
-        ))))
+      (map
+       (lambda (obj)
+         (let ([line (json:ref obj 'line #f)]
+               [char (json:ref obj 'char #f)]
+               [len (json:ref obj 'len #f)]
+               ;; Some confusing vocabulary here. I'm storing just the
+               ;; Command portion of the lens in the DB.
+               [command (json:ref obj 'codelens #f)])
+           (json:make-object
+            [command (json:string->object command)]
+            [range (->lsp-range `#(range ,line ,char ,line ,(+ char len)))])))
+       (tower-client:get-code-lens (uri->abs-path uri)))))
 
   (define (keep-file? fn)
     (let ([ext (path-extension fn)])
@@ -749,7 +753,7 @@
            (cond
             [(ht:ref ($state uri->doc) uri #f) =>
              (lambda (doc)
-               `#(ok ,(get-code-lens doc) ,state))]
+               `#(ok ,(get-code-lens doc uri) ,state))]
             [else `#(ok () ,state)]))]
         ["shutdown"
          (set! shutdown-requested? #t)

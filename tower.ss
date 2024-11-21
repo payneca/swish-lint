@@ -105,6 +105,17 @@ where D.name=?
 order by substr(F.filename,-3)='.ss' desc, F.filename asc, D.line asc"
        name root-fk)))
 
+  (define ($lens-in-file filename)
+    (execute
+     (ct:join #\space
+       "select D.line,D.char,length(D.name),json_extract(D.meta, '$.codelens') as codelens"
+       "from refs D"
+       "inner join files F on F.file_pk=D.file_fk"
+       "where F.filename=?"
+       "  and codelens is not null"
+       "order by D.line asc")
+     filename))
+
   (define ($refs-in-file name filename)
     (execute "
 select D.line,D.char from refs D
@@ -300,6 +311,30 @@ order by rank desc, count desc, candidates.name asc"
                     [time (- end start)])])
          (do-log 1 log)
          (rpc:respond ws msg refs))]
+      [get-code-lens
+       (let* ([filename (json:get msg '(params filename))]
+              [root-fk (root-key)]
+              [start (erlang:now)]
+              [lens
+               (map
+                (lambda (row)
+                  (match row
+                    [#(,line ,char ,len ,codelens)
+                     (json:make-object
+                      [line line]
+                      [char char]
+                      [len len]
+                      [codelens codelens])]))
+                (transaction 'log-db
+                  ($lens-in-file root-fk)))]
+              [end (erlang:now)]
+              [log (json:make-object
+                    [_op_ "get-code-lens"]
+                    [filename filename]
+                    [found (length lens)]
+                    [time (- end start)])])
+         (do-log 1 log)
+         (rpc:respond ws msg lens))]
       [reset-directory
        (let* ([dir (json:get msg '(params directory))]
               [pk
