@@ -40,6 +40,7 @@
    (keywords)
    (progress)
    (read)
+   (semtok)
    (software-info)
    (swish imports)
    (tower-client)
@@ -119,12 +120,11 @@
 
   (define (rpc:request id method params)
     (lsp:send
-     (trace-msg
-      (json:make-object
-       [jsonrpc "2.0"]
-       [id id]
-       [method method]
-       [params params]))))
+     (json:make-object
+      [jsonrpc "2.0"]
+      [id id]
+      [method method]
+      [params params])))
 
   (define (rpc:fire-event method params)
     (lsp:send
@@ -443,6 +443,17 @@
                         acc)
                        acc)))))))))
 
+  (define (get-semantic-tokens doc uri range semtok-mode)
+    (trace-time 'semantic-tokens
+      (match (try
+              (let ([start (or (and range (json:ref range '(start line) #f)) 0)]
+                    [end (or (and range (json:ref range '(end line) #f)) (fx- (most-positive-fixnum) 1))])
+                (semtok:encode (doc:get-text doc) start end semtok-mode)))
+        [`(catch ,reason)
+         (trace-expr `(semantic-tokens => ,(exit-reason->english reason)))
+         json-null]
+        [,data (json:make-object [data data])])))
+
   (define (keep-file? fn)
     (let ([ext (path-extension fn)])
       (or (member ext '("ss" "ms"))
@@ -516,6 +527,7 @@
       uri->doc
       client-cap
       requests
+      semtok-mode
       )
     (define shutdown-requested? #f)
 
@@ -529,6 +541,7 @@
                [uri->doc (ht:make string-hash string=? string?)]
                [client-cap #f]
                [requests (ht:make string-hash string=? string?)]
+               [semtok-mode 'full]
                )))
     (define (terminate reason state) 'ok)
     (define (handle-call msg from state)
@@ -540,10 +553,11 @@
              (let ([method (json:get msg 'method)]
                    [params (json:ref msg 'params #f)])
                `#(reply ok ,(do-handle-notify method params state)))]
-            [(and (string? id) (ht:ref ($state requests) id #f))
-             (trace-expr 'received-reply)
-             (trace-msg msg)
-             `#(reply ok ,($state copy* [requests (ht:delete requests id)]))]
+            [(and (string? id) (ht:ref ($state requests) id #f)) =>
+             (lambda (callback)
+               `#(reply ok
+                   ,(callback msg
+                      ($state copy* [requests (ht:delete requests id)]))))]
             [(not (json:ref msg 'method #f))
              ;; A response to a request we are not waiting for
              (trace-expr `(unexpected-response ,id))
@@ -636,6 +650,14 @@
                   [completionProvider #t]
                   [definitionProvider #t]
                   [referencesProvider #t]
+                  [semanticTokensProvider
+                   (json:make-object
+                    [range #t]
+                    [full #t]
+                    [legend
+                     (json:make-object
+                      [tokenTypes (map symbol->string (semtok:types-list))]
+                      [tokenModifiers (map symbol->string (semtok:modifiers-list))])])]
                   [documentHighlightProvider #t]
                   [documentFormattingProvider #t]
                   [documentRangeFormattingProvider #t]
@@ -699,6 +721,23 @@
              (lambda (doc)
                `#(ok ,(indent-range doc range options) ,state))]
             [else `#(ok () ,state)]))]
+        ["textDocument/semanticTokens/range"
+         (let ([uri (json:get params '(textDocument uri))]
+               [range (json:get params 'range)]
+               [semtok-mode ($state semtok-mode)])
+           (cond
+            [(ht:ref ($state uri->doc) uri #f) =>
+             (lambda (doc)
+               `#(spawn ,(lambda () (get-semantic-tokens doc uri range semtok-mode)) ,state))]
+            [else `#(ok ,json-null ,state)]))]
+        ["textDocument/semanticTokens/full"
+         (let ([uri (json:get params '(textDocument uri))]
+               [semtok-mode ($state semtok-mode)])
+           (cond
+            [(ht:ref ($state uri->doc) uri #f) =>
+             (lambda (doc)
+               `#(spawn ,(lambda () (get-semantic-tokens doc uri #f semtok-mode)) ,state))]
+            [else `#(ok ,json-null ,state)]))]
         ["shutdown"
          (set! shutdown-requested? #t)
          `#(ok ,json-null ,state)]
@@ -772,6 +811,28 @@
           #f
           state)]
         ["textDocument/didClose" state]
+        ["workspace/didChangeConfiguration"
+         (let* ([semtok-mode (json:ref params '(settings swish semtok-mode) #f)]
+                ;; Clients may send settings without our section, or
+                ;; with an unknown value. Use the default mode rather
+                ;; than one text->semtoks cannot handle.
+                [semtok-mode (match semtok-mode
+                               ["no-modifiers" 'no-modifiers]
+                               [,_ 'full])])
+           (cond
+            [(eq? semtok-mode ($state semtok-mode))
+             state]
+            [else
+             (let ([id (gensym->unique-string (gensym))])
+               (rpc:request id
+                 "workspace/semanticTokens/refresh"
+                 (json:make-object))
+               ($state copy
+                 [semtok-mode semtok-mode]
+                 [requests
+                  (ht:set ($state requests)
+                    id
+                    (lambda (msg state) state))]))]))]
         ["$/setTrace" state]
         ["exit" (app:shutdown (if shutdown-requested? 0 1))]
         [,_
