@@ -472,6 +472,17 @@
                       result)))))
              (reverse result))]))))
 
+  (define (get-code-lens doc)
+    (trace-time 'code-lens
+      (list
+       (json:make-object
+        [command
+         (json:make-object
+          [title "🔥This is fire!🔥"]
+          [command "no-op"])]
+        [range (->lsp-range `#(range 49 12 49 ,(+ 12 13)))] ; lsp:read-loop
+        ))))
+
   (define (keep-file? fn)
     (let ([ext (path-extension fn)])
       (or (member ext '("ss" "ms"))
@@ -662,6 +673,7 @@
                   [definitionProvider #t]
                   [foldingRangeProvider #t]
                   [referencesProvider #t]
+                  [codeLensProvider #t]
                   [documentHighlightProvider #t]
                   [documentFormattingProvider #t]
                   [documentRangeFormattingProvider #t]
@@ -731,6 +743,13 @@
             [(ht:ref ($state uri->doc) uri #f) =>
              (lambda (doc)
                `#(ok ,(get-folding-ranges doc) ,state))]
+            [else `#(ok () ,state)]))]
+        ["textDocument/codeLens"
+         (let ([uri (json:get params '(textDocument uri))])
+           (cond
+            [(ht:ref ($state uri->doc) uri #f) =>
+             (lambda (doc)
+               `#(ok ,(get-code-lens doc) ,state))]
             [else `#(ok () ,state)]))]
         ["shutdown"
          (set! shutdown-requested? #t)
