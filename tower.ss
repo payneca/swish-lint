@@ -83,27 +83,38 @@
   (define (maybe-rows rows)
     (and (not (null? rows)) rows))
 
-  (define ($defns-in-file name filename)
+  (define ($get-unique-id line char filename)
+    (scalar
+     (execute "
+select D.uid
+from refs D
+inner join files F on F.file_pk=D.file_fk
+where D.line=?1
+  and ?2 between D.char and D.char + length(D.name)
+  and F.filename=?3"
+       line char filename)))
+
+  (define ($defns-in-file uid filename)
     (maybe-rows
      (execute "
-select F.filename,D.line,D.char from refs D
+select F.filename,D.line,D.char,length(D.name) from refs D
 inner join files F on F.file_pk=D.file_fk
-where D.name=?
-  and F.filename=?
+where D.uid=?1
+  and F.filename=?2
   and D.type='defn'
 order by D.line asc"
-       name filename)))
+       uid filename)))
 
-  (define ($defns-in-workspace name root-fk)
+  (define ($defns-in-workspace uid root-fk)
     (maybe-rows
      (execute "
-select F.filename,D.line,D.char from refs D
+select F.filename,D.line,D.char,length(D.name) from refs D
 inner join files F on F.file_pk=D.file_fk
-where D.name=?
-  and D.root_fk=?
+where D.uid=?1
+  and D.root_fk=?2
   and D.type='defn'
 order by substr(F.filename,-3)='.ss' desc, F.filename asc, D.line asc"
-       name root-fk)))
+       uid root-fk)))
 
   (define ($refs-in-file line char filename)
     (execute "
@@ -135,17 +146,17 @@ where D.uid in
 order by substr(F.filename,-3)='.ss' desc, F.filename asc, D.line asc"
       line char filename root-fk))
 
-  (define ($defns-anywhere name filename)
+  (define ($defns-anywhere uid filename)
     (maybe-rows
      (execute "
-select F.filename,D.line,D.char from refs D
+select F.filename,D.line,D.char,length(D.name) from refs D
 inner join roots R on D.root_fk=R.root_pk
 inner join files F on F.file_pk=D.file_fk
-where D.name=?
+where D.uid=?1
   and D.type='defn'
-order by F.filename=? desc, R.timestamp desc,
+order by F.filename=?2 desc, R.timestamp desc,
 substr(F.filename,-3)='.ss' desc, F.filename asc, D.line asc"
-       name filename)))
+       uid filename)))
 
   (define do-log
     (case-lambda
@@ -238,28 +249,32 @@ order by rank desc, count desc, candidates.name asc"
          (rpc:respond ws msg completions))]
       [get-definitions
        (let* ([filename (json:get msg '(params filename))]
-              [name (json:get msg '(params name))]
+              [line (json:get msg '(params line))]
+              [char (json:get msg '(params char))]
               [root-fk (root-key)]
               [start (erlang:now)]
               [defns
                (map
                 (lambda (row)
                   (match row
-                    [#(,fn ,line ,char)
+                    [#(,fn ,line ,char ,len)
                      (json:make-object
                       [filename fn]
                       [line line]
-                      [char char])]))
+                      [char char]
+                      [len len])]))
                 (transaction 'log-db
-                  (or ($defns-in-file name filename)
-                      ($defns-in-workspace name root-fk)
-                      ($defns-anywhere name filename)
-                      '())))]
+                  (let ([uid ($get-unique-id line char filename)])
+                    (or ($defns-in-file uid filename)
+                        ($defns-in-workspace uid root-fk)
+                        ($defns-anywhere uid filename)
+                        '()))))]
               [end (erlang:now)]
               [log (json:make-object
                     [_op_ "get-definitions"]
                     [filename filename]
-                    [name name]
+                    [line line]
+                    [char char]
                     [found (length defns)]
                     [time (- end start)])])
          (do-log 1 log)
