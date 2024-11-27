@@ -374,57 +374,48 @@
   (define (get-definitions doc uri line char)
     (let ([line (+ line 1)]             ; LSP is 0-based
           [char (+ char 1)])
-      (cond
-       [(doc:get-value-near doc line char) =>
-        (lambda (name)
-          (map
-           (lambda (defn)
-             (let ([uri (abs-path->uri (json:ref defn 'filename #f))]
-                   [line (- (json:ref defn 'line #f) 1)] ; LSP is 0-based
-                   [char (- (json:ref defn 'char #f) 1)])
-               (make-location uri
-                 (make-range
-                  (make-pos line char)
-                  (make-pos line (+ char (string-length name)))))))
-           (tower-client:get-definitions (uri->abs-path uri) name)))]
-       [else '()])))
+      (map
+       (lambda (defn)
+         (let ([uri (abs-path->uri (json:ref defn 'filename #f))]
+               [line (- (json:ref defn 'line #f) 1)] ; LSP is 0-based
+               [char (- (json:ref defn 'char #f) 1)]
+               [len (json:ref defn 'len #f)])
+           (make-location uri
+             (make-range
+              (make-pos line char)
+              (make-pos line (+ char len))))))
+       (tower-client:get-definitions (uri->abs-path uri) line char))))
 
   (define (get-references doc uri line char)
     (let ([line (+ line 1)]             ; LSP is 0-based
           [char (+ char 1)])
-      (cond
-       [(doc:get-value-near doc line char) =>
-        (lambda (name)
-          (map
-           (lambda (ref)
-             (let ([uri (abs-path->uri (json:ref ref 'filename #f))]
-                   [line (- (json:ref ref 'line #f) 1)] ; LSP is 0-based
-                   [char (- (json:ref ref 'char #f) 1)])
-               (make-location uri
-                 (make-range
-                  (make-pos line char)
-                  (make-pos line (+ char (string-length name)))))))
-           (tower-client:get-references (uri->abs-path uri) name)))]
-       [else '()])))
+      (map
+       (lambda (ref)
+         (let ([uri (abs-path->uri (json:ref ref 'filename #f))]
+               [line (- (json:ref ref 'line #f) 1)] ; LSP is 0-based
+               [char (- (json:ref ref 'char #f) 1)]
+               [len (json:ref ref 'len #f)])
+           (make-location uri
+             (make-range
+              (make-pos line char)
+              (make-pos line (+ char len))))))
+       (tower-client:get-references (uri->abs-path uri) line char))))
 
   (define (highlight-references doc uri line char)
     (let ([line (+ line 1)]             ; LSP is 0-based
           [char (+ char 1)])
-      (cond
-       [(doc:get-value-near doc line char) =>
-        (lambda (name)
-          (map
-           (lambda (ref)
-             (let ([line (- (json:ref ref 'line #f) 1)] ; LSP is 0-based
-                   [char (- (json:ref ref 'char #f) 1)])
-               (json:make-object
-                [kind 1]                ; Text
-                [range
-                 (make-range
-                  (make-pos line char)
-                  (make-pos line (+ char (string-length name))))])))
-           (tower-client:get-local-references (uri->abs-path uri) name)))]
-       [else '()])))
+      (map
+       (lambda (ref)
+         (let ([line (- (json:ref ref 'line #f) 1)] ; LSP is 0-based
+               [char (- (json:ref ref 'char #f) 1)]
+               [len (json:ref ref 'len #f)])
+           (json:make-object
+            [kind 1]                    ; Text
+            [range
+             (make-range
+              (make-pos line char)
+              (make-pos line (+ char len)))])))
+       (tower-client:get-local-references (uri->abs-path uri) line char))))
 
   (define (indent-range doc range options)
     (let* ([start (or (and range (json:ref range '(start line) #f)) 0)]
