@@ -561,6 +561,19 @@
           [(,@nss-defn) (check-range nss-ref1 get-defns)])
          'ok)
 
+        ;; References within a line are in order.
+        (did-change uri1
+          (code "(list x (+ 1 x) x)"))
+        (wait-for-test-sync uri1)
+        (match-let*
+         ([,x-ref1 `(,uri1 from 0 6 to 0 7)]
+          [,x-ref2 `(,uri1 from 0 13 to 0 14)]
+          [,x-ref3 `(,uri1 from 0 16 to 0 17)]
+          [(,@x-ref1 ,@x-ref2 ,@x-ref3) (check-range x-ref1 get-local-refs)]
+          [(,@x-ref1 ,@x-ref2 ,@x-ref3) (check-range x-ref2 get-local-refs)]
+          [(,@x-ref1 ,@x-ref2 ,@x-ref3) (check-range x-ref3 get-local-refs)])
+         'ok)
+
         (did-change uri1
           (code
            "(define-syntax (define-thing x)"
