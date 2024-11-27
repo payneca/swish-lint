@@ -105,14 +105,20 @@ where D.name=?
 order by substr(F.filename,-3)='.ss' desc, F.filename asc, D.line asc"
        name root-fk)))
 
-  (define ($refs-in-file name filename)
+  (define ($refs-in-file line char filename)
     (execute "
-select D.line,D.char from refs D
+select D.line,D.char,length(D.name) from refs D
 inner join files F on F.file_pk=D.file_fk
-where D.name=?
-  and F.filename=?
+where D.uid in
+  (select D.uid
+   from refs D
+   inner join files F on F.file_pk=D.file_fk
+   where D.line=?1
+     and ?2 between D.char and D.char + length(D.name)
+     and F.filename=?3)
+  and F.filename=?3
 order by D.line asc"
-      name filename))
+      line char filename))
 
   (define ($refs-in-workspace name root-fk)
     (execute "
@@ -254,23 +260,26 @@ order by rank desc, count desc, candidates.name asc"
          (rpc:respond ws msg defns))]
       [get-local-references
        (let* ([filename (json:get msg '(params filename))]
-              [name (json:get msg '(params name))]
+              [line (json:get msg '(params line))]
+              [char (json:get msg '(params char))]
               [start (erlang:now)]
               [refs
                (map
                 (lambda (row)
                   (match row
-                    [#(,line ,char)
+                    [#(,line ,char ,len)
                      (json:make-object
                       [line line]
-                      [char char])]))
+                      [char char]
+                      [len len])]))
                 (transaction 'log-db
-                  ($refs-in-file name filename)))]
+                  ($refs-in-file line char filename)))]
               [end (erlang:now)]
               [log (json:make-object
                     [_op_ "get-local-references"]
                     [filename filename]
-                    [name name]
+                    [line line]
+                    [char char]
                     [found (length refs)]
                     [time (- end start)])])
          (do-log 1 log)
@@ -362,12 +371,13 @@ order by rank desc, count desc, candidates.name asc"
             (lambda (ref)
               (let ([meta (json:get ref 'meta)]
                     [name (json:get ref 'name)])
-                (db:log 'log-db "insert into refs(timestamp,root_fk,file_fk,pre1,name,type,line,char,meta) values(?,?,?,?,?,?,?,?,?)"
+                (db:log 'log-db "insert into refs(timestamp,root_fk,file_fk,pre1,name,uid,type,line,char,meta) values(?,?,?,?,?,?,?,?,?,?)"
                   (coerce start)
                   (coerce root-fk)
                   (coerce file-fk)
                   (coerce (prefix-integer name))
                   (coerce name)
+                  (coerce name) ; TODO proper identifier (maybe from the json input)
                   (coerce (and (= (json:ref meta 'definition 0) 1)
                                "defn"))
                   (coerce (json:get ref 'line))
@@ -498,6 +508,9 @@ order by rank desc, count desc, candidates.name asc"
         [file_fk integer]
         [pre1 integer]
         [name text]
+        [uid text] ; TODO consider using an integer for speed instead
+                   ; (need to figure out how to compute a useful value
+                   ; when inserting references.
         [type text]
         [line integer]
         [char integer]
@@ -512,6 +525,7 @@ order by rank desc, count desc, candidates.name asc"
       (create-index 'events_timestamp "events(timestamp)")
 
       (create-index 'refs_name "refs(name)")
+      (create-index 'refs_name "refs(uid)")
       (create-index 'refs_root "refs(root_fk)")
       (create-index 'refs_file "refs(file_fk)")
       (create-index 'refs_pre1 "refs(pre1)")

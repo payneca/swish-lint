@@ -242,14 +242,15 @@
         [filename filename]
         [name name])])))
 
-  (define (tower-client:get-local-references filename name)
+  (define (tower-client:get-local-references filename line char)
     (tower-client:call
      (json:make-object
       [method "get-local-references"]
       [params
        (json:make-object
         [filename filename]
-        [name name])])))
+        [line line]
+        [char char])])))
 
   (define (tower-client:log msg)
     (tower-client:cast
