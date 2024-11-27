@@ -120,14 +120,20 @@ where D.uid in
 order by D.line asc"
       line char filename))
 
-  (define ($refs-in-workspace name root-fk)
+  (define ($refs-in-workspace line char filename root-fk)
     (execute "
-select F.filename,D.line,D.char from refs D
+select F.filename,D.line,D.char,length(D.name) from refs D
 inner join files F on F.file_pk=D.file_fk
-where D.name=?
-  and D.root_fk=?
+where D.uid in
+  (select D.uid
+   from refs D
+   inner join files F on F.file_pk=D.file_fk
+   where D.line=?1
+     and ?2 between D.char and D.char + length(D.name)
+     and F.filename=?3)
+  and D.root_fk=?4
 order by substr(F.filename,-3)='.ss' desc, F.filename asc, D.line asc"
-      name root-fk))
+      line char filename root-fk))
 
   (define ($defns-anywhere name filename)
     (maybe-rows
@@ -286,25 +292,28 @@ order by rank desc, count desc, candidates.name asc"
          (rpc:respond ws msg refs))]
       [get-references
        (let* ([filename (json:get msg '(params filename))]
-              [name (json:get msg '(params name))]
+              [line (json:get msg '(params line))]
+              [char (json:get msg '(params char))]
               [root-fk (root-key)]
               [start (erlang:now)]
               [refs
                (map
                 (lambda (row)
                   (match row
-                    [#(,fn ,line ,char)
+                    [#(,fn ,line ,char ,len)
                      (json:make-object
                       [filename fn]
                       [line line]
-                      [char char])]))
+                      [char char]
+                      [len len])]))
                 (transaction 'log-db
-                  ($refs-in-workspace name root-fk)))]
+                  ($refs-in-workspace line char filename root-fk)))]
               [end (erlang:now)]
               [log (json:make-object
                     [_op_ "get-references"]
                     [filename filename]
-                    [name name]
+                    [line line]
+                    [char char]
                     [found (length refs)]
                     [time (- end start)])])
          (do-log 1 log)
