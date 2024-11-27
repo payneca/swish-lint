@@ -83,57 +83,80 @@
   (define (maybe-rows rows)
     (and (not (null? rows)) rows))
 
-  (define ($defns-in-file name filename)
+  (define ($get-unique-id line char filename)
+    (scalar
+     (execute "
+select D.uid
+from refs D
+inner join files F on F.file_pk=D.file_fk
+where D.line=?1
+  and ?2 between D.char and D.char + D.len
+  and F.filename=?3"
+       line char filename)))
+
+  (define ($defns-in-file uid filename)
     (maybe-rows
      (execute "
-select F.filename,D.line,D.char from refs D
+select F.filename,D.line,D.char,D.len from refs D
 inner join files F on F.file_pk=D.file_fk
-where D.name=?
-  and F.filename=?
+where D.uid=?1
+  and F.filename=?2
   and D.type='defn'
 order by D.line asc"
-       name filename)))
+       uid filename)))
 
-  (define ($defns-in-workspace name root-fk)
+  (define ($defns-in-workspace uid root-fk)
     (maybe-rows
      (execute "
-select F.filename,D.line,D.char from refs D
+select F.filename,D.line,D.char,D.len from refs D
 inner join files F on F.file_pk=D.file_fk
-where D.name=?
-  and D.root_fk=?
+where D.uid=?1
+  and D.root_fk=?2
   and D.type='defn'
 order by substr(F.filename,-3)='.ss' desc, F.filename asc, D.line asc"
-       name root-fk)))
+       uid root-fk)))
 
-  (define ($refs-in-file name filename)
+  (define ($refs-in-file line char filename)
     (execute "
-select D.line,D.char from refs D
+select D.line,D.char,D.len from refs D
 inner join files F on F.file_pk=D.file_fk
-where D.name=?
-  and F.filename=?
+where D.uid in
+  (select D.uid
+   from refs D
+   inner join files F on F.file_pk=D.file_fk
+   where D.line=?1
+     and ?2 between D.char and D.char + D.len
+     and F.filename=?3)
+  and F.filename=?3
 order by D.line asc"
-      name filename))
+      line char filename))
 
-  (define ($refs-in-workspace name root-fk)
+  (define ($refs-in-workspace line char filename root-fk)
     (execute "
-select F.filename,D.line,D.char from refs D
+select F.filename,D.line,D.char,D.len from refs D
 inner join files F on F.file_pk=D.file_fk
-where D.name=?
-  and D.root_fk=?
+where D.uid in
+  (select D.uid
+   from refs D
+   inner join files F on F.file_pk=D.file_fk
+   where D.line=?1
+     and ?2 between D.char and D.char + D.len
+     and F.filename=?3)
+  and D.root_fk=?4
 order by substr(F.filename,-3)='.ss' desc, F.filename asc, D.line asc"
-      name root-fk))
+      line char filename root-fk))
 
-  (define ($defns-anywhere name filename)
+  (define ($defns-anywhere uid filename)
     (maybe-rows
      (execute "
-select F.filename,D.line,D.char from refs D
+select F.filename,D.line,D.char,D.len from refs D
 inner join roots R on D.root_fk=R.root_pk
 inner join files F on F.file_pk=D.file_fk
-where D.name=?
+where D.uid=?1
   and D.type='defn'
-order by F.filename=? desc, R.timestamp desc,
+order by F.filename=?2 desc, R.timestamp desc,
 substr(F.filename,-3)='.ss' desc, F.filename asc, D.line asc"
-       name filename)))
+       uid filename)))
 
   (define do-log
     (case-lambda
@@ -226,76 +249,86 @@ order by rank desc, count desc, candidates.name asc"
          (rpc:respond ws msg completions))]
       [get-definitions
        (let* ([filename (json:get msg '(params filename))]
-              [name (json:get msg '(params name))]
+              [line (json:get msg '(params line))]
+              [char (json:get msg '(params char))]
               [root-fk (root-key)]
               [start (erlang:now)]
               [defns
                (map
                 (lambda (row)
                   (match row
-                    [#(,fn ,line ,char)
+                    [#(,fn ,line ,char ,len)
                      (json:make-object
                       [filename fn]
                       [line line]
-                      [char char])]))
+                      [char char]
+                      [len len])]))
                 (transaction 'log-db
-                  (or ($defns-in-file name filename)
-                      ($defns-in-workspace name root-fk)
-                      ($defns-anywhere name filename)
-                      '())))]
+                  (let ([uid ($get-unique-id line char filename)])
+                    (or ($defns-in-file uid filename)
+                        ($defns-in-workspace uid root-fk)
+                        ($defns-anywhere uid filename)
+                        '()))))]
               [end (erlang:now)]
               [log (json:make-object
                     [_op_ "get-definitions"]
                     [filename filename]
-                    [name name]
+                    [line line]
+                    [char char]
                     [found (length defns)]
                     [time (- end start)])])
          (do-log 1 log)
          (rpc:respond ws msg defns))]
       [get-local-references
        (let* ([filename (json:get msg '(params filename))]
-              [name (json:get msg '(params name))]
+              [line (json:get msg '(params line))]
+              [char (json:get msg '(params char))]
               [start (erlang:now)]
               [refs
                (map
                 (lambda (row)
                   (match row
-                    [#(,line ,char)
+                    [#(,line ,char ,len)
                      (json:make-object
                       [line line]
-                      [char char])]))
+                      [char char]
+                      [len len])]))
                 (transaction 'log-db
-                  ($refs-in-file name filename)))]
+                  ($refs-in-file line char filename)))]
               [end (erlang:now)]
               [log (json:make-object
                     [_op_ "get-local-references"]
                     [filename filename]
-                    [name name]
+                    [line line]
+                    [char char]
                     [found (length refs)]
                     [time (- end start)])])
          (do-log 1 log)
          (rpc:respond ws msg refs))]
       [get-references
        (let* ([filename (json:get msg '(params filename))]
-              [name (json:get msg '(params name))]
+              [line (json:get msg '(params line))]
+              [char (json:get msg '(params char))]
               [root-fk (root-key)]
               [start (erlang:now)]
               [refs
                (map
                 (lambda (row)
                   (match row
-                    [#(,fn ,line ,char)
+                    [#(,fn ,line ,char ,len)
                      (json:make-object
                       [filename fn]
                       [line line]
-                      [char char])]))
+                      [char char]
+                      [len len])]))
                 (transaction 'log-db
-                  ($refs-in-workspace name root-fk)))]
+                  ($refs-in-workspace line char filename root-fk)))]
               [end (erlang:now)]
               [log (json:make-object
                     [_op_ "get-references"]
                     [filename filename]
-                    [name name]
+                    [line line]
+                    [char char]
                     [found (length refs)]
                     [time (- end start)])])
          (do-log 1 log)
@@ -361,13 +394,15 @@ order by rank desc, count desc, candidates.name asc"
            (for-each
             (lambda (ref)
               (let ([meta (json:get ref 'meta)]
-                    [name (json:get ref 'name)])
-                (db:log 'log-db "insert into refs(timestamp,root_fk,file_fk,pre1,name,type,line,char,meta) values(?,?,?,?,?,?,?,?,?)"
+                    [name (coerce (json:get ref 'name))])
+                (db:log 'log-db "insert into refs(timestamp,root_fk,file_fk,pre1,name,len,uid,type,line,char,meta) values(?,?,?,?,?,?,?,?,?,?,?)"
                   (coerce start)
                   (coerce root-fk)
                   (coerce file-fk)
                   (coerce (prefix-integer name))
-                  (coerce name)
+                  name
+                  (string-length name)
+                  name ; TODO proper identifier (maybe from the json input)
                   (coerce (and (= (json:ref meta 'definition 0) 1)
                                "defn"))
                   (coerce (json:get ref 'line))
@@ -498,6 +533,10 @@ order by rank desc, count desc, candidates.name asc"
         [file_fk integer]
         [pre1 integer]
         [name text]
+        [len integer]                   ; precomputed string-length
+        [uid text] ; TODO consider using an integer for speed instead
+                   ; (need to figure out how to compute a useful value
+                   ; when inserting references.)
         [type text]
         [line integer]
         [char integer]
@@ -512,6 +551,7 @@ order by rank desc, count desc, candidates.name asc"
       (create-index 'events_timestamp "events(timestamp)")
 
       (create-index 'refs_name "refs(name)")
+      (create-index 'refs_uid "refs(uid)")
       (create-index 'refs_root "refs(root_fk)")
       (create-index 'refs_file "refs(file_fk)")
       (create-index 'refs_pre1 "refs(pre1)")
