@@ -549,7 +549,7 @@ order by rank desc, count desc, candidates.name asc"
       (create-index 'events_timestamp "events(timestamp)")
 
       (create-index 'refs_name "refs(name)")
-      (create-index 'refs_name "refs(uid)")
+      (create-index 'refs_uid "refs(uid)")
       (create-index 'refs_root "refs(root_fk)")
       (create-index 'refs_file "refs(file_fk)")
       (create-index 'refs_pre1 "refs(pre1)")
