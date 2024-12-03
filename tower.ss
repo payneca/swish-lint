@@ -90,14 +90,14 @@ select D.uid
 from refs D
 inner join files F on F.file_pk=D.file_fk
 where D.line=?1
-  and ?2 between D.char and D.char + length(D.name)
+  and ?2 between D.char and D.char + D.len
   and F.filename=?3"
        line char filename)))
 
   (define ($defns-in-file uid filename)
     (maybe-rows
      (execute "
-select F.filename,D.line,D.char,length(D.name) from refs D
+select F.filename,D.line,D.char,D.len from refs D
 inner join files F on F.file_pk=D.file_fk
 where D.uid=?1
   and F.filename=?2
@@ -108,7 +108,7 @@ order by D.line asc"
   (define ($defns-in-workspace uid root-fk)
     (maybe-rows
      (execute "
-select F.filename,D.line,D.char,length(D.name) from refs D
+select F.filename,D.line,D.char,D.len from refs D
 inner join files F on F.file_pk=D.file_fk
 where D.uid=?1
   and D.root_fk=?2
@@ -118,14 +118,14 @@ order by substr(F.filename,-3)='.ss' desc, F.filename asc, D.line asc"
 
   (define ($refs-in-file line char filename)
     (execute "
-select D.line,D.char,length(D.name) from refs D
+select D.line,D.char,D.len from refs D
 inner join files F on F.file_pk=D.file_fk
 where D.uid in
   (select D.uid
    from refs D
    inner join files F on F.file_pk=D.file_fk
    where D.line=?1
-     and ?2 between D.char and D.char + length(D.name)
+     and ?2 between D.char and D.char + D.len
      and F.filename=?3)
   and F.filename=?3
 order by D.line asc"
@@ -133,14 +133,14 @@ order by D.line asc"
 
   (define ($refs-in-workspace line char filename root-fk)
     (execute "
-select F.filename,D.line,D.char,length(D.name) from refs D
+select F.filename,D.line,D.char,D.len from refs D
 inner join files F on F.file_pk=D.file_fk
 where D.uid in
   (select D.uid
    from refs D
    inner join files F on F.file_pk=D.file_fk
    where D.line=?1
-     and ?2 between D.char and D.char + length(D.name)
+     and ?2 between D.char and D.char + D.len
      and F.filename=?3)
   and D.root_fk=?4
 order by substr(F.filename,-3)='.ss' desc, F.filename asc, D.line asc"
@@ -149,7 +149,7 @@ order by substr(F.filename,-3)='.ss' desc, F.filename asc, D.line asc"
   (define ($defns-anywhere uid filename)
     (maybe-rows
      (execute "
-select F.filename,D.line,D.char,length(D.name) from refs D
+select F.filename,D.line,D.char,D.len from refs D
 inner join roots R on D.root_fk=R.root_pk
 inner join files F on F.file_pk=D.file_fk
 where D.uid=?1
@@ -394,14 +394,15 @@ order by rank desc, count desc, candidates.name asc"
            (for-each
             (lambda (ref)
               (let ([meta (json:get ref 'meta)]
-                    [name (json:get ref 'name)])
-                (db:log 'log-db "insert into refs(timestamp,root_fk,file_fk,pre1,name,uid,type,line,char,meta) values(?,?,?,?,?,?,?,?,?,?)"
+                    [name (coerce (json:get ref 'name))])
+                (db:log 'log-db "insert into refs(timestamp,root_fk,file_fk,pre1,name,len,uid,type,line,char,meta) values(?,?,?,?,?,?,?,?,?,?,?)"
                   (coerce start)
                   (coerce root-fk)
                   (coerce file-fk)
                   (coerce (prefix-integer name))
-                  (coerce name)
-                  (coerce name) ; TODO proper identifier (maybe from the json input)
+                  name
+                  (string-length name)
+                  name ; TODO proper identifier (maybe from the json input)
                   (coerce (and (= (json:ref meta 'definition 0) 1)
                                "defn"))
                   (coerce (json:get ref 'line))
@@ -532,6 +533,7 @@ order by rank desc, count desc, candidates.name asc"
         [file_fk integer]
         [pre1 integer]
         [name text]
+        [len integer] ; precomputed string-length
         [uid text] ; TODO consider using an integer for speed instead
                    ; (need to figure out how to compute a useful value
                    ; when inserting references.
