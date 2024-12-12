@@ -24,11 +24,14 @@
 (library (indent)
   (export
    fold-indent
+   get-token
    has-prop?
    indent
    indent-tokens
+   make-token-port
    token
    token-bfp
+   token-cond
    token-efp
    token-err
    token-length

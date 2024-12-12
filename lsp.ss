@@ -320,7 +320,10 @@
                             [name (get-symbol-name name)]
                             [line line]
                             [char char]
-                            [meta meta])])
+                            [meta
+                             (if (procedure? meta)
+                                 (meta source)
+                                 meta)])])
                   (hashtable-update! refs (key name line char)
                     (lambda (old)
                       (if old
@@ -351,8 +354,38 @@
         (try-walk 'walk-refs-re walk-refs-re text car
           (json:make-object
            [regexp-pass 1])))
+
+      ;; TODO this notion is good, but this is the wrong place. Should
+      ;; do this during the checking pass, and save the data in a
+      ;; separate overlay/lens table.
+      (define (walk-tokens text table proc)
+        (let* ([tokens (tokenize text)] ; TODO mark-whitespace ?
+               [ip (make-token-port tokens)])
+          (let lp ()
+            (let ([t (get-token ip)])
+              (token-cond t type
+                [eof 'ok]
+                [(and (eq? type 'atomic) #;(symbol? (token-value t)))
+                 (proc table (token-raw t) t)
+                 (lp)]
+                [else
+                 (lp)])))))
+      (define (refs-tokens)
+        (and annotated-code
+             (try-walk 'walk-tokens walk-tokens text token-bfp
+               (lambda (t)
+                 (let ([meta
+                        (json:make-object
+                         [type (symbol->string (token-type t))]
+                         [tokens-pass 1])])
+                   (let ([props (map symbol->string (enum-set->list (token-props t)))])
+                     (unless (null? props)
+                       (json:set! meta 'token-props props)))
+                   meta)))))
+      
       (or (defns-anno) (defns-re))
       (or (refs-anno) (refs-re))
+      (refs-tokens)
       (tower-client:update-references filename
         (vector->list (hashtable-values refs)))
       (event-mgr:notify (cons 'test-sync uri))))
