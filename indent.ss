@@ -535,24 +535,6 @@
      scheme-normal-indent]
     [(do syntax-case) 2]
     [(begin delay dynamic-wind) 0]
-    [(case
-         lambda
-       let
-       let*
-       letrec
-       let-values
-       let*-values
-       let-syntax
-       letrec-syntax
-       syntax-rules
-       library
-       call-with-input-file
-       with-input-from-file
-       with-input-from-port
-       call-with-output-file
-       with-output-to-file
-       with-output-to-port)
-     1]
     ;; Manual updates to style
     [(call-with-values) 0]
     [(! @ $ % ^ & : ? ~ _) scheme-normal-indent]
