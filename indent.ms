@@ -353,6 +353,32 @@
 (indent-mat 1-keywords ()
   (check-indent
    (code
+    "(case x"
+    "  [1 'ok]"
+    "  [2 'not-ok]"
+    "  [else #f])")
+   (code
+    "(case x"
+    "[1 'ok]"
+    "[2 'not-ok]"
+    "[else #f])"))
+
+  (check-indent
+   (code
+    "(case"
+    " x"
+    " [1 'ok]"
+    " [2 'not-ok]"
+    " [else #f])")
+   (code
+    "(case"
+    "x"
+    "[1 'ok]"
+    "[2 'not-ok]"
+    "[else #f])"))
+
+  (check-indent
+   (code
     "(lambda args"
     "  (list args))")
    (code
@@ -366,6 +392,75 @@
    (code
     "(lambda (args)"
     "args)"))
+
+  (check-indent
+   (code
+    "(lambda"
+    " (args)"
+    " args)")
+   (code
+    "(lambda"
+    "(args)"
+    "args)"))
+
+  (for-each
+   (lambda (kw)
+     (check-indent
+      (code
+       (format "(~a ([x 12])" kw)
+       (format "  body ...)"))
+      (code
+       (format "(~a ([x 12])" kw)
+       (format "body ...)"))))
+   '("let*" "letrec" "let-values" "let*-values" "let-syntax" "letrec-syntax"))
+
+  (check-indent
+   (code
+    "(syntax-rules ()"
+    "  [(_ abc)"
+    "   (begin abc)])")
+   (code
+    "(syntax-rules ()"
+    "[(_ abc)"
+    "(begin abc)])"))
+
+  (check-indent
+   (code
+    "(syntax-rules"
+    " ()"
+    " [(_ abc)"
+    "  (begin abc)])")
+   (code
+    "(syntax-rules"
+    "()"
+    "[(_ abc)"
+    "(begin abc)])"))
+
+  (check-indent
+   (code
+    "(library (foo)"
+    "  (export a)"
+    "  (import b)"
+    "  body ...)")
+   (code
+    "(library (foo)"
+    "(export a)"
+    "(import b)"
+    "body ...)"))
+
+  (check-indent
+   (code
+    "(library"
+    " (foo)"
+    " (export a)"
+    " (import b)"
+    " body ...)")
+   (code
+    "(library"
+    "(foo)"
+    "(export a)"
+    "(import b)"
+    "body ...)"))
   )
 
 (indent-mat 2-keywords ()
@@ -402,6 +497,20 @@
     "((= i 12))"
     "body"
     "...)"))
+
+  (check-indent
+   (code
+    "(syntax-case"
+    "    x"
+    "    (kwd)"
+    "  [(_ a b c)"
+    "   #'(body ...)])")
+   (code
+    "(syntax-case"
+    "x"
+    "(kwd)"
+    "[(_ a b c)"
+    "#'(body ...)])"))
   )
 
 (indent-mat normal-keywords ()
@@ -479,6 +588,18 @@
     "(let lp"
     "([x 12]"
     "[y 13])"
+    "body"
+    "...)"))
+
+  (check-indent
+   (code
+    "(let"
+    " ()"
+    " body"
+    " ...)")
+   (code
+    "(let"
+    "()"
     "body"
     "...)"))
   )
