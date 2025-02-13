@@ -54,27 +54,27 @@
   (define (init cmd args type get put get-trace)
     (define me self)
     (let*-values
-        ([(op ip ep os-pid) (spawn-os-process cmd args me)]
-         [(ip op ep)
-          (match type
-            [binary (values ip op ep)]
-            [utf8 (values (binary->utf8 ip)
-                    (binary->utf8 op)
-                    (binary->utf8 ep))])])
-      (process-trap-exit #t)
-      (unless put
-        (force-close-output-port op))
-      `#(ok
-         ,(<os-process-state> make
-            [os-pid os-pid]
-            [ip ip]
-            [op op]
-            [ep ep]
-            [put put]
-            [exit-status 1]
-            [reader (spawn&link (lambda () (get ip me)))]
-            [tracer (spawn&link (lambda () (get-trace ep me)))]
-            ))))
+     ([(op ip ep os-pid) (spawn-os-process cmd args me)]
+      [(ip op ep)
+       (match type
+         [binary (values ip op ep)]
+         [utf8 (values (binary->utf8 ip)
+                 (binary->utf8 op)
+                 (binary->utf8 ep))])])
+     (process-trap-exit #t)
+     (unless put
+       (force-close-output-port op))
+     `#(ok
+        ,(<os-process-state> make
+           [os-pid os-pid]
+           [ip ip]
+           [op op]
+           [ep ep]
+           [put put]
+           [exit-status 1]
+           [reader (spawn&link (lambda () (get ip me)))]
+           [tracer (spawn&link (lambda () (get-trace ep me)))]
+           ))))
 
   (define (terminate reason state)
     ($state open [os-pid ip op ep exit-status reader tracer])

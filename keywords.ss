@@ -100,28 +100,28 @@
           ht)]
         [(((,exe . ,args) . ,libs) . ,rest)
          (call-with-values
-           (lambda () (try (spawn-os-process exe args self)))
-           (case-lambda
-            [(fault)
-             (report-error fault)
-             (f rest)]
-            [(to-stdin from-stdout from-stderr os-pid)
-             (let ([to-stdin (binary->utf8 to-stdin)]
-                   [from-stdout (binary->utf8 from-stdout)]
-                   [from-stderr (binary->utf8 from-stderr)])
-               (fprintf to-stdin "~s\n" (generate-keywords-expr `(,'quasiquote ,libs)))
-               (on-exit (begin (close-input-port from-stdout)
-                               (close-input-port from-stderr))
-                 (close-output-port to-stdin)
-                 (read-keywords from-stdout ht)
-                 (receive
-                  (after 10000
-                    (osi_kill* os-pid 15)
-                    (throw 'os-process-timeout))
-                  [#(process-terminated ,@os-pid ,exit-status ,_)
-                   (unless (= exit-status 0)
-                     (errorf 'generate-keywords
-                       "~a subprocess exited with non-zero status: ~a" exe exit-status))])))]))])))
+          (lambda () (try (spawn-os-process exe args self)))
+          (case-lambda
+           [(fault)
+            (report-error fault)
+            (f rest)]
+           [(to-stdin from-stdout from-stderr os-pid)
+            (let ([to-stdin (binary->utf8 to-stdin)]
+                  [from-stdout (binary->utf8 from-stdout)]
+                  [from-stderr (binary->utf8 from-stderr)])
+              (fprintf to-stdin "~s\n" (generate-keywords-expr `(,'quasiquote ,libs)))
+              (on-exit (begin (close-input-port from-stdout)
+                              (close-input-port from-stderr))
+                (close-output-port to-stdin)
+                (read-keywords from-stdout ht)
+                (receive
+                 (after 10000
+                   (osi_kill* os-pid 15)
+                   (throw 'os-process-timeout))
+                 [#(process-terminated ,@os-pid ,exit-status ,_)
+                  (unless (= exit-status 0)
+                    (errorf 'generate-keywords
+                      "~a subprocess exited with non-zero status: ~a" exe exit-status))])))]))])))
 
   (define (get-keywords report-error)
     (match (try
