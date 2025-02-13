@@ -459,36 +459,36 @@
   (define (find-files-external ff path)
     (trace-expr `(find-files-external ,ff ,path))
     (call-with-values
-      (lambda ()
-        (try (parameterize ([cd path])
-               (spawn-os-process (car ff) (cdr ff) (spawn values)))))
-      (case-lambda
-       [(fault)
-        (trace-expr `(find-files => ,(exit-reason->english fault)))
-        '()]
-       [(to-stdin from-stdout from-stderr os-pid)
-        (let ([to-stdin (binary->utf8 to-stdin)]
-              [from-stdout (binary->utf8 from-stdout)]
-              [from-stderr (binary->utf8 from-stderr)])
-          (on-exit (begin (close-input-port from-stdout)
-                          (close-input-port from-stderr))
-            (close-output-port to-stdin)
-            (spawn
-             (lambda ()
-               (let lp ()
-                 (let ([line (get-line from-stderr)])
-                   (unless (eof-object? line)
-                     (display line (trace-output-port))
-                     (newline (trace-output-port))
-                     (lp))))))
-            (let lp ([ls '()])
-              (match (get-line from-stdout)
-                [#!eof (reverse ls)]
-                [,fn
-                 (let ([fn (path-combine path fn)])
-                   (if (and (regular-file? fn) (keep-file? fn))
-                       (lp (cons fn ls))
-                       (lp ls)))]))))])))
+     (lambda ()
+       (try (parameterize ([cd path])
+              (spawn-os-process (car ff) (cdr ff) (spawn values)))))
+     (case-lambda
+      [(fault)
+       (trace-expr `(find-files => ,(exit-reason->english fault)))
+       '()]
+      [(to-stdin from-stdout from-stderr os-pid)
+       (let ([to-stdin (binary->utf8 to-stdin)]
+             [from-stdout (binary->utf8 from-stdout)]
+             [from-stderr (binary->utf8 from-stderr)])
+         (on-exit (begin (close-input-port from-stdout)
+                         (close-input-port from-stderr))
+           (close-output-port to-stdin)
+           (spawn
+            (lambda ()
+              (let lp ()
+                (let ([line (get-line from-stderr)])
+                  (unless (eof-object? line)
+                    (display line (trace-output-port))
+                    (newline (trace-output-port))
+                    (lp))))))
+           (let lp ([ls '()])
+             (match (get-line from-stdout)
+               [#!eof (reverse ls)]
+               [,fn
+                (let ([fn (path-combine path fn)])
+                  (if (and (regular-file? fn) (keep-file? fn))
+                      (lp (cons fn ls))
+                      (lp ls)))]))))])))
 
   (define (find-files-default path)
     (filter-files path

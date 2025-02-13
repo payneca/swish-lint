@@ -153,6 +153,27 @@ The indenter:
    12])
 ```
 
+### Forms with a body
+
+Emacs gives some forms, such as `lambda`, `let`, `case`, `library` and
+`syntax-rules`, a special indentation. When the first subform starts on
+the line after the head, Emacs indents it four columns and the body two.
+The indenter indents these forms like any other.
+
+In Emacs:
+``` scheme
+(lambda
+    (args)
+  body)
+```
+
+The indenter:
+``` scheme
+(lambda
+ (args)
+ body)
+```
+
 ### Named Let
 
 Emacs handles `let` differently than other forms. Emacs may win this
