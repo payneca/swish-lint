@@ -131,11 +131,41 @@
   (define my-regexp
     (re (join delims #\|)))
 
-  (define (open-token-string text)
+  (define (open-token-string text start-line end-line)
+    ;; tokens should be in the inclusive range [start-line, end-line],
+    ;; meaning that a multi-line string that crosses a boundary should
+    ;; be included in the output. start-line and end-line are 1-based.
+    ;;
+    ;; We always tokenize from the beginning of the text, because a
+    ;; line may begin inside a multi-line string or block comment.
+    ;; line-number is the line at the start of the next token.
+    (define line-number 1)
+    (define (count-newlines bfp efp)
+      ;; count using the original text to avoid allocation
+      (do ([i bfp (fx+ i 1)]
+           [c 0 (if (eq? (string-ref text i) #\newline) (fx+ c 1) c)])
+          ((fx= i efp) c)))
+    (define (in-range? bfp efp)
+      ;; Every token is built in order, so this advances line-number
+      ;; past the token whether or not it is in range. An eol token
+      ;; belongs to the line it ends.
+      (let* ([first line-number]
+             [n (count-newlines bfp efp)]
+             [last (if (and (fx> n 0)
+                            (eq? (string-ref text (fx- efp 1)) #\newline))
+                       (fx+ first (fx- n 1))
+                       (fx+ first n))])
+        (set! line-number (fx+ first n))
+        (and (<= first end-line) (<= start-line last))))
+    (define (yield+ t)
+      (when t
+        (yield t)))
     (define (build-token* type value bfp efp err props)
-      (make-token type (token-type-indexer type) value value bfp efp err props))
+      (and (in-range? bfp efp)
+           (make-token type (token-type-indexer type) value value bfp efp err props)))
     (define (build-token type value bfp efp err props)
-      (make-token type (token-type-indexer type) value (substring text bfp efp) bfp efp err props))
+      (and (in-range? bfp efp)
+           (make-token type (token-type-indexer type) value (substring text bfp efp) bfp efp err props)))
     (define (as-token str start end err)
       (and
        (fx< start end)
@@ -159,19 +189,20 @@
           [else
            (build-token* 'text (substring str start end) start end err empty-props)]))))
     (define (gen-ext-tokens start end err)
-      (unless (fx= start end)
+      (when (and (fx< start end)
+                 (<= line-number end-line))
         (let ([c (string-ref text start)])
           (cond
            [(eq? c #\newline)           ; newline
             (let ([next (fx+ start 1)])
-              (yield (build-token 'eol #f start next err empty-props))
+              (yield+ (build-token 'eol #f start next err empty-props))
               (gen-ext-tokens next end err))]
            [(eq? c #\;)                 ; line comments
             (let lp ([next (fx+ start 1)])
               (cond
                [(or (fx>= next end)
                     (eq? (string-ref text next) #\newline))
-                (yield
+                (yield+
                  (build-token* 'line-comment
                    (substring text start next)
                    start
@@ -187,7 +218,7 @@
                         (eq? (string-ref text next) #\|)
                         (fx+ next 1)))) =>
             (lambda (next)
-              (yield (build-token 'lblock-comment #f start next err empty-props))
+              (yield+ (build-token 'lblock-comment #f start next err empty-props))
               (gen-ext-tokens next end err))]
            [(and (eq? c #\|)            ; rblock-comment
                  (let ([next (fx+ start 1)])
@@ -195,7 +226,7 @@
                         (eq? (string-ref text next) #\#)
                         (fx+ next 1)))) =>
             (lambda (next)
-              (yield (build-token 'rblock-comment #f start next err empty-props))
+              (yield+ (build-token 'rblock-comment #f start next err empty-props))
               (gen-ext-tokens next end err))]
            [(char-whitespace? c) ; contiguous whitespace, not newlines
             (let lp ([next (fx+ start 1)])
@@ -204,7 +235,7 @@
                     (let ([c2 (string-ref text next)])
                       (or (eq? c2 #\newline)
                           (not (char-whitespace? c2)))))
-                (yield (build-token 'ws (fx- next start) start next err empty-props))
+                (yield+ (build-token 'ws (fx- next start) start next err empty-props))
                 (gen-ext-tokens next end err)]
                [else
                 (lp (fx+ next 1))]))]
@@ -212,14 +243,14 @@
             (match (pregexp-match-positions my-regexp text start end)
               [((,bfp . ,efp))
                ;; Something occurred before the regexp
-               (cond [(as-token text start bfp err) => yield])
+               (cond [(as-token text start bfp err) => yield+])
                ;; Regexp found something
-               (cond [(as-token text bfp efp err) => yield])
+               (cond [(as-token text bfp efp err) => yield+])
                (gen-ext-tokens efp end err)]
               [,_
                ;; Something occurred that was not processed by read-token,
                ;; and was not caught by the regular expressions.
-               (cond [(as-token text start end err) => yield])])]))))
+               (cond [(as-token text start end err) => yield+])])]))))
     (define (gen-tokens)
       (let ([ip (open-input-string text)]
             [end (string-length text)])
@@ -234,22 +265,23 @@
           (get-line ip)
           (gen-ext-tokens 0 (port-position ip) #f))
         (let lp ([prior-efp (port-position ip)])
-          (unless (= prior-efp end)
+          (when (and (< prior-efp end)
+                     (<= line-number end-line))
             (match (try (let-values ([(type value bfp efp) (read-token ip)])
                           (unless (= prior-efp bfp)
                             ;; Something occurred before the read token, read extended tokens first.
                             (gen-ext-tokens prior-efp bfp #f))
                           (unless (= bfp efp)
-                            (yield (build-token type value bfp efp #f
-                                     (cond
-                                      [(eq? type 'atomic)
-                                       (cond
-                                        [(string? value) (token-prop string)]
-                                        [(number? value) (token-prop number)]
-                                        [(char? value) (token-prop char)]
-                                        [else empty-props])]
-                                      [else
-                                       empty-props]))))
+                            (yield+ (build-token type value bfp efp #f
+                                      (cond
+                                       [(eq? type 'atomic)
+                                        (cond
+                                         [(string? value) (token-prop string)]
+                                         [(number? value) (token-prop number)]
+                                         [(char? value) (token-prop char)]
+                                         [else empty-props])]
+                                       [else
+                                        empty-props]))))
                           efp))
               [`(catch ,r ,err)
                (let ([s (exit-reason->english r)])
@@ -275,6 +307,10 @@
                      (gen-ext-tokens prior-efp efp err)
                      (lp efp))]))]
               [,efp (lp efp)])))))
+    (arg-check 'open-token-string
+      [text string?]
+      [start-line fixnum? (lambda (x) (fx> x 0))]
+      [end-line fixnum? (lambda (x) (fx>= x start-line))])
     (generator
      (gen-tokens)
      (yield (eof-object))))
@@ -285,8 +321,8 @@
   (define (token-length t)
     (string-length (token-raw t)))
 
-  (define (parse text)
-    (let ([tp (open-token-string text)])
+  (define (parse text start-line end-line)
+    (let ([tp (open-token-string text start-line end-line)])
       (let lp ()
         (let ([t (read-extended-token tp)])
           (if (eof-object? t)
@@ -819,10 +855,13 @@
 
       (get-output-tokens op)))
 
-  (define (tokenize text)
-    (let* ([tokens (parse text)]
-           [tokens (mark (make-token-port tokens))])
-      tokens))
+  (define tokenize
+    (case-lambda
+     [(text) (tokenize text 1 (most-positive-fixnum))]
+     [(text start-line end-line)
+      (let* ([tokens (parse text start-line end-line)]
+             [tokens (mark (make-token-port tokens))])
+        tokens)]))
 
   (define (indent-tokens tokens)
     (let* ([tokens (indent-code tokens)]
