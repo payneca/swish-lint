@@ -1,0 +1,2 @@
+This product includes code developed and copyrighted by Beckman
+Coulter, Inc. It is released under the terms of the MIT license.

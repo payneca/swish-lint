@@ -53,6 +53,8 @@ prepare-source:
 
 install: all
 	install -d ${INSTALLROOT}
+	install -m 444 LICENSE ${INSTALLROOT}
+	install -m 444 NOTICE.org ${INSTALLROOT}
 	install swish-lint${EXESUFFIX} ${INSTALLROOT}
 	install -m 644 swish-lint.boot ${INSTALLROOT}
 	install -m 644 lsp-swish.el ${INSTALLROOT}
