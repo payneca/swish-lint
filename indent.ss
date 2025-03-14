@@ -536,7 +536,6 @@
     [(do syntax-case) 2]
     [(begin delay dynamic-wind) 0]
     ;; Manual updates to style
-    [(call-with-values) 0]
     [(! @ $ % ^ & : ? ~ _) scheme-normal-indent]
     )
 

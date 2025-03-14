@@ -954,8 +954,8 @@
   (check-indent
    (code
     "(call-with-values"
-    "  (lambda () 12)"
-    "  (lambda (x) x))")
+    " (lambda () 12)"
+    " (lambda (x) x))")
    (code
     "(call-with-values"
     "(lambda () 12)"
@@ -963,7 +963,7 @@
   (check-indent
    (code
     "(call-with-values (lambda () 12)"
-    "                  (lambda (x) x))")
+    "  (lambda (x) x))")
    (code
     "(call-with-values (lambda () 12)"
     "(lambda (x) x))"))
