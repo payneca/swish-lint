@@ -22,7 +22,9 @@
 
 (import
  (indent)
- (software-info))
+ (software-info)
+ (testing common)
+ )
 
 (software-info:install)
 
@@ -91,20 +93,20 @@
 (define (check-indent expected input)
   (define (maybe-write-file prefix text)
     (when write-files?
-      (let* ([path (format "~a/~a-~a.ss" prefix (mat-name) (file-counter))]
+      (let* ([path (format "~a/indent-~a-~a.ss" prefix (mat-name) (file-counter))]
              [op (open-file-to-replace (make-directory-path path))])
         (on-exit (close-port op)
           (display text op)
           (newline op)))))
 
   (file-counter (+ (file-counter) 1))
-  (maybe-write-file "mat-expected" expected)
+  (maybe-write-file (expected-dir) expected)
   (match (try (indent input))
     [`(catch ,_ ,err)
-     (maybe-write-file "mat-actual" input)
+     (maybe-write-file (actual-dir) input)
      (throw err)]
     [,actual
-     (maybe-write-file "mat-actual" actual)
+     (maybe-write-file (actual-dir) actual)
      (unless (equal? expected actual)
        (print-details expected actual)
        (throw `(indentation-failed

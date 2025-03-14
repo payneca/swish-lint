@@ -7,8 +7,6 @@
 coverage.html
 git.revision
 git.tag
-mat-actual/
-mat-expected/
 mat-report.html
 profile.data
 static-keywords

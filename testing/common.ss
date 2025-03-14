@@ -22,6 +22,9 @@
 
 (library (testing common)
   (export
+   actual-dir
+   expected-dir
+   support-dir
    with-tmp-dir
    write-script
    )
@@ -29,6 +32,10 @@
    (chezscheme)
    (swish imports)
    )
+  (define (support-dir) (path-combine (base-dir) "support"))
+  (define (expected-dir) (path-combine (support-dir) "mat-expected"))
+  (define (actual-dir) (path-combine (support-dir) "mat-actual"))
+
   (define-syntax with-tmp-dir
     (syntax-rules ()
       [(_ e0 e1 ...)
