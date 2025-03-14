@@ -121,12 +121,25 @@
   :type '(alist :key-type string :value-type face)
   :package-version '(lsp-mode . "8.1"))
 
+(lsp-defcustom lsp-swish-semtok-mode "full"
+  "The way swish-lint processes semantic tokens."
+  :type '(choice
+          (const "no-modifiers")
+          (const "full"))
+  :group 'lsp-swish
+  :package-version '(lsp-mode . "9.0.0")
+  :lsp-path "swish.semtok-mode")
+
 (lsp-register-client
  (make-lsp-client
   :new-connection (lsp-stdio-connection
                    '("swish-lint" "--lsp"))
   :major-modes '(scheme-mode)
   :server-id 'swish-ls
+  :initialized-fn (lambda (workspace)
+                    (with-lsp-workspace
+                        (lsp--set-configuration (lsp-configuration-section "swish"))))
+  :synchronize-sections '("swish")
   :semantic-tokens-faces-overrides
   `(:discard-default-modifiers t
     :discard-default-types t
