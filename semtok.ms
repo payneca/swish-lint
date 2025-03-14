@@ -31,12 +31,12 @@
 (software-info:install)
 
 (isolate-mat classifier ()
-  (define (test text)
+  (define (test text classify)
     (let lp ([ls (tokenize text)] [state #f] [acc '()])
       (match ls
         [() (reverse acc)]
         [(,t . ,rest)
-         (let-values ([(class mods state) (semtok:classify t state)])
+         (let-values ([(class mods state) (classify t state)])
            (lp rest state (cons (list (token-raw t) class (and mods (enum-set->list mods)) state) acc)))])))
   (define (read-exprs filename)
     (let ([ip (open-file-to-read filename)])
@@ -58,16 +58,36 @@
   (define actual-fn (path-combine (actual-dir) filename))
 
   (delete-file actual-fn)
-  (let ([actual (test (utf8->string (read-file (path-combine (support-dir) filename))))]
-        [expected (read-exprs (path-combine (expected-dir) filename))])
+  (let* ([text (utf8->string (read-file (path-combine (support-dir) filename)))]
+         [actual (test text semtok:classify-full)]
+         [expected (read-exprs (path-combine (expected-dir) filename))])
     (write-exprs actual-fn actual)
     (unless (equal? expected actual)
-      (throw 'classifier-mismatch))))
+      (throw 'full-mismatch))
+
+    ;; When using no-modifiers, expect the same output except that any
+    ;; token with modifiers return no class and no modifiers.
+    (let ([expected
+           (map (lambda (x)
+                  (match x
+                    [(,t ,_ ,mods ,state)
+                     (guard mods)
+                     (list t #f #f state)]
+                    [,_ x]))
+             expected)]
+          [actual (test text semtok:classify-no-modifiers)])
+      (unless (equal? expected actual)
+        (throw 'no-modifiers-mismatch)))))
 
 (isolate-mat encode ()
   (match-let*
    ([(0 1 6 2 0 0 7 3 8 0 0 4 2 4 0)
-     (semtok:encode "(define foo 12)" 0 (most-positive-fixnum))]
+     (semtok:encode "(define foo 12)" 0 (most-positive-fixnum) 'full)]
     [(0 0 10 6 0 1 0 10 6 0 1 0 7 6 0)
-     (semtok:encode "\"this is a\nmulti-line\nstring\"" 0 (most-positive-fixnum))])
+     (semtok:encode "\"this is a\nmulti-line\nstring\"" 0 (most-positive-fixnum) 'full)]
+    ;; Check no-modifiers works as intended
+    [(0 1 4 1 8 0 9 2 4 0)
+     (semtok:encode "(set! foo 12)" 0 (most-positive-fixnum) 'full)]
+    [(0 10 2 4 0)
+     (semtok:encode "(set! foo 12)" 0 (most-positive-fixnum) 'no-modifiers)])
    'ok))

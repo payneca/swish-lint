@@ -59,6 +59,8 @@ e.g., .emacs.d/init.el or .emacs file:
 (setq lsp-prefer-flymake nil)
 (setq lsp-enable-snippet nil)
 (setq lsp-idle-delay 0.100)
+(setq lsp-semantic-tokens-enable t)
+(setq lsp-semantic-tokens-honor-refresh-requests t)
 
 (require 'lsp-ui)
 (add-hook 'lsp-mode-hook 'lsp-ui-mode)

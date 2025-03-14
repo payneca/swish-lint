@@ -23,7 +23,8 @@
 #!chezscheme
 (library (semtok)
   (export
-   semtok:classify
+   semtok:classify-full
+   semtok:classify-no-modifiers
    semtok:encode
    semtok:list->modifiers
    semtok:modifiers
@@ -127,7 +128,7 @@
       include
       ]])
 
-  (define (semtok:classify t state)
+  (define (semtok:classify-full t state)
     ;; state: #f | lparen | regexp | define | define+ | let | define-syntax | define-syntax+
     ;;
     ;; patterns:
@@ -196,6 +197,14 @@
      [else
       (values #f #f #f)]))
 
+  (define (semtok:classify-no-modifiers t state)
+    (let-values ([(class modifiers state) (semtok:classify-full t state)])
+      (cond
+       [modifiers
+        (values #f #f #f)]
+       [else
+        (values class modifiers state)])))
+
   (define-tuple <semtok> line char length type modifiers)
 
   (define (cons*token t rest)
@@ -219,14 +228,18 @@
                           [char delta-start])])
               (cons*token new (lp rest t)))])])))
 
-  (define (text->semtoks text start-line end-line)
+  (define (text->semtoks text start-line end-line semtok-mode)
+    (define classify
+      (match semtok-mode
+        [no-modifiers semtok:classify-no-modifiers]
+        [full semtok:classify-full]))
     (let ([tokens (tokenize text start-line end-line)]
           [table (make-code-lookup-table text)])
       (let outer ([tokens tokens] [state #f] [acc '()])
         (match tokens
           [() (reverse acc)]
           [(,t . ,rest)
-           (let-values ([(class modifiers state) (semtok:classify t state)])
+           (let-values ([(class modifiers state) (classify t state)])
              (cond
               [class
                (let ()
@@ -273,7 +286,7 @@
                                 acc))]))]))))]
               [else (outer rest state acc)]))]))))
 
-  (define (semtok:encode text start-line end-line)
+  (define (semtok:encode text start-line end-line semtok-mode)
     (encode-tokens
-     (text->semtoks text start-line end-line)))
+     (text->semtoks text start-line end-line semtok-mode)))
   )
