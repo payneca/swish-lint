@@ -33,6 +33,7 @@
  )
 
 (software-info:install)
+(disarm-user-config)
 
 (define-syntax code
   (syntax-rules ()
@@ -339,10 +340,6 @@
                  (throw `#(failed ,actual ,exp)))
                (lp (+ n 1) rest)]))]))))
 
-  ;; TODO: This needs to be more robust in the presence of stray files
-  ;; in the testing directory. Possibly need to create a separate
-  ;; directory and write code into it instead of using swish-lint's
-  ;; directory.
   (let ([rpc (start-lsp-server (get-real-path "."))])
     (on-exit (stop-lsp-server rpc)
       (assert (null? (get-completions "file:///tmp/does-not-exist.ss" 0 0)))
