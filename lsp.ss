@@ -756,11 +756,20 @@
                                (lambda (done total)
                                  (format "~a/~a files" done total)))])
                (trace-time 'enumerate-directories
-                 (fold-left
-                  (lambda (state fn)
-                    (updated (abs-path->uri fn) #f #t progress state))
-                  state
-                  (find-files dir)))))]
+                 (let ([files (find-files dir)])
+                   (cond
+                    [(null? files)
+                     ;; This is necessary for testing code that
+                     ;; depends on the progress events.
+                     (progress:inc-total progress)
+                     (progress:inc-done progress)
+                     state]
+                    [else
+                     (fold-left
+                      (lambda (state fn)
+                        (updated (abs-path->uri fn) #f #t progress state))
+                      state
+                      files)])))))]
           [else state])]
         ["textDocument/didOpen"
          (let ([doc (json:get params 'textDocument)])

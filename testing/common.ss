@@ -23,6 +23,7 @@
 (library (testing common)
   (export
    actual-dir
+   disarm-user-config
    expected-dir
    support-dir
    with-tmp-dir
@@ -30,7 +31,9 @@
    )
   (import
    (chezscheme)
+   (config-params)
    (swish imports)
+   (swish testing)
    )
   (define (support-dir) (path-combine (base-dir) "support"))
   (define (expected-dir) (path-combine (support-dir) "mat-expected"))
@@ -42,6 +45,12 @@
        (parameterize ([tmp-dir (path-combine (base-dir) "tmp")])
          e0 e1 ...
          (remove-directory (tmp-dir)))]))
+
+  (define-environment-parameters XDG_CONFIG_HOME)
+
+  (define (disarm-user-config)
+    (XDG_CONFIG_HOME (support-dir))
+    (config:find-files (list (path-combine (support-dir) "no-enumeration"))))
 
   (define (write-script fn exprs)
     (let ([op (open-file-to-replace (make-directory-path fn))])
