@@ -17,6 +17,9 @@
   (lambda (x)
     body ...))
 
+(alias a other-thing)
+(alias (no-highlight) due-to-invalid-pattern)
+
 (define x (lambda (y z) body ...))
 
 (define (x y z) body ...)
