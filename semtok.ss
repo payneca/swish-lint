@@ -99,9 +99,9 @@
            (eq? (last-char raw) #\>))))
 
   (define-syntax (define-table x)
-    (syntax-case x ()
-      [(_ name (category [key ...]) ...)
-       (andmap identifier? #'(category ... key ... ...))
+    (syntax-case x (=>)
+      [(_ name ([key ...] => category) ...)
+       (andmap identifier? #'(key ... ... category ...))
        (with-syntax ([ref (compound-id #'name #'name "-ref")])
          #'(module (name ref)
              (define name
@@ -116,17 +116,16 @@
                (#3%eq-hashtable-ref name x #f))))]))
 
   (define-table keywords
-    [let [let trace-let trace-lambda]]
-    [define-syntax [define-syntax trace-define-syntax]]
-    [unnamed
-     [case-lambda
+    ([let trace-let trace-lambda] => let)
+    ([define-syntax trace-define-syntax] => define-syntax)
+    ([case-lambda
       lambda
       let* letrec letrec* let-values let*-values
       syntax syntax-case syntax-rules let-syntax letrec-syntax
       fluid-let fluid-let-syntax
       library import export only except prefix rename
       include
-      ]])
+      ] => unnamed))
 
   (define (semtok:classify-full t state)
     ;; state: #f | lparen | regexp | define | define+ | let | define-syntax | define-syntax+
