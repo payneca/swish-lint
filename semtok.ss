@@ -124,8 +124,13 @@
       syntax syntax-case syntax-rules let-syntax letrec-syntax
       fluid-let fluid-let-syntax
       library import export only except prefix rename
-      include
-      ] => unnamed))
+      include meta-cond
+      ] => unnamed)
+    ;; HACK These categories are hacks to approximate what might
+    ;; follow alias and meta. Not sure what this should really be.
+    ([alias] => define+)
+    ([meta] => lparen)
+    )
 
   (define (semtok:classify-full t state)
     ;; state: #f | lparen | regexp | define | define+ | let | define-syntax | define-syntax+
@@ -157,8 +162,6 @@
           (values 'keyword #f 'define)]
          [(or (eq? value 're) (starts-with? raw "pregexp"))
           (values #f #f 'regexp)]
-         [(pregexp-match (re "^meta(?:-[\\S]+)?$") raw)
-          (values 'macro #f #f)]
          [else
           (let* ([mods (semtok:modifiers)]
                  [mods
