@@ -60,6 +60,7 @@
      optimize2
      optimize3
      side-effect
+     legal
      )
     semtok:modifiers)
 
@@ -145,7 +146,14 @@
     (define type (token-type t))
     (cond
      [(memq type '(ws eol)) (values #f #f state)]
-     [(has-prop? t 'comment) (values 'comment #f state)]
+     [(has-prop? t 'comment)
+      (cond
+       [(eq? state 'legal)
+        (values 'comment (semtok:modifiers legal) state)]
+       [(pregexp-match (re "Copyright") (token-raw t))
+        (values 'comment (semtok:modifiers legal) 'legal)]
+       [else
+        (values 'comment #f state)])]
      [(has-prop? t 'string) (values (if (eq? state 'regexp) 'regexp 'string) #f #f)]
      [(has-prop? t 'char) (values 'string #f #f)]
      [(has-prop? t 'number) (values 'number #f #f)]

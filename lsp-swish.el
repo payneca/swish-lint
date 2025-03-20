@@ -72,6 +72,12 @@
   :group 'lsp-swish-semantic-tokens
   )
 
+(defface swish-legal-modifier-face
+  '((t :inherit default))
+  "Face for legal comment modifier"
+  :group 'lsp-swish-semantic-tokens
+  )
+
 (defcustom swish-internal-modifier 'swish-internal-modifier-face
   "Face for semantic token modifier for `internal` code."
   :type 'face
@@ -96,6 +102,12 @@
   :group 'lsp-swish-semantic-tokens
   :package-version '(lsp-mode . "9.0.0"))
 
+(defcustom swish-legal-modifier 'swish-legal-modifier-face
+  "Face for semantic token modifier for legal comments."
+  :type 'face
+  :group 'lsp-swish-semantic-tokens
+  :package-version '(lsp-mode . "9.0.0"))
+
 (defcustom lsp-swish-semantic-token-faces
   '(("comment" . lsp-face-semhl-comment)
     ("function" . lsp-face-semhl-function)
@@ -115,7 +127,8 @@
   `(("internal" . ,swish-internal-modifier)
     ("optimize2" . ,swish-optimize2-modifier)
     ("optimize3" . ,swish-optimize3-modifier)
-    ("side-effect" . ,swish-side-effect-modifier))
+    ("side-effect" . ,swish-side-effect-modifier)
+    ("legal" . ,swish-legal-modifier))
   "Mapping between swish-lint modifiers and fonts to apply."
   :group 'lsp-swish
   :type '(alist :key-type string :value-type face)
