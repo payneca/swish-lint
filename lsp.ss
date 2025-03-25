@@ -42,6 +42,7 @@
    (read)
    (semtok)
    (software-info)
+   (sourcerer)
    (swish imports)
    (tower-client)
    (trace)
@@ -314,7 +315,7 @@
         (match
          (try
           (walk code source-table
-            (lambda (table name source)
+            (lambda (table name uid type source)
               (let ([bfp (get-bfp source)]
                     [efp (get-efp source)])
                 (let-values ([(line char) (fp->line/char table bfp)])
@@ -329,6 +330,15 @@
                               [char char]
                               [len (- efp bfp)]
                               [meta meta])])
+                    (when uid
+                      (json:extend-object new
+                        [uid uid]))
+                    (when type ; HACK This isn't the right thing to do. Maybe delete after we get some confidence.
+                      (let ([new-meta (hashtable-copy meta #t)])
+                        (json:extend-object new-meta
+                          [type (coerce type)])
+                        (json:extend-object new
+                          [meta new-meta])))
                     (hashtable-update! refs (key name line char)
                       (lambda (old)
                         (if old
@@ -359,8 +369,13 @@
         (try-walk 'walk-refs-re walk-refs-re text car cdr
           (json:make-object
            [regexp-pass 1])))
-      (or (defns-anno) (defns-re))
-      (or (refs-anno) (refs-re))
+      (define (refs-sourcerer)
+        (try-walk 'sourcerer:walk-refs sourcerer:walk-refs filename source-object-bfp source-object-efp
+          (json:make-object
+           [sourcerer-pass 1])))
+      ;;(or (defns-anno) (defns-re))
+      ;;(or (refs-anno) (refs-re))
+      (refs-sourcerer)
       (tower-client:update-references filename
         (vector->list (hashtable-values refs)))
       (event-mgr:notify (cons 'test-sync uri))))
