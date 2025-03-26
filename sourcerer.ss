@@ -26,10 +26,11 @@
 
   ;; TODO better names? don't want to confuse with make-priminfo elsewhere
   (define-record-type prim-info
-    (nongenerative #{prim-info ble5klpzns025alnatm0ydav9-2})
+    (nongenerative #{prim-info a9h3n8t2pis427wy51x6e77bg-0})
     (fields
      (immutable name)
-     (mutable ref-src*)))
+     (mutable ref2-src*)
+     (mutable ref3-src*)))
 
   (define-record-type syntax-info
     (nongenerative #{syntax-info ble5klpzns025alnatm0ydav9-3})
@@ -104,31 +105,40 @@
                   (lambda (info)
                     (match info
                       [`(global-info ,name ,ref-src* ,set-src*)
-                       (define uid (get-uid info name))
-                       (define (ref! src) (guarded 'global name uid src))
-                       (for-each ref! ref-src*)
-                       (for-each ref! set-src*)]))
+                       ;; global-info's name is a gensym. We can use
+                       ;; that for our unique id, but need to get a
+                       ;; pretty name for the rest of the system.
+                       (define uid (format "~s" name))
+                       (let ([name (parameterize ([print-gensym #f]) (format "~s" name))])
+                         (define (ref! src) (guarded 'global name uid src))
+                         (for-each ref! ref-src*)
+                         (for-each ref! set-src*))]))
                   data)
                  (lp)]
-                #;
                 [prim
                  (vector-for-each
                   (lambda (info)
                     (match info
-                      [`(prim-info ,name ,ref-src*)
+                      [`(prim-info ,name ,ref2-src* ,ref3-src*)
                        (define uid (get-uid info name))
                        (define (ref! src) (guarded 'prim name uid src))
-                       (for-each ref! ref-src*)]))
+                       (for-each ref! ref2-src*)
+                       (for-each ref! ref3-src*)]))
                   data)
                  (lp)]
-                #;
                 [syntax
                  (vector-for-each
                   (lambda (info)
                     (match info
                       [`(syntax-info ,name ,bind-src ,ref-src*)
                        (define uid (get-uid info name))
-                       (define (ref! src) (guarded 'syntax name uid src))
+                       (define (ref! src)
+                         (guarded 'syntax name uid
+                           (cond
+                            ;; Built in syntax are marked. For now,
+                            ;; pretend like we just don't have source.
+                            [(eq? src 'built-in) #f]
+                            [else src])))
                        (ref! bind-src)
                        (for-each ref! ref-src*)]))
                   data)
