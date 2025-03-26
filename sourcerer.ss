@@ -76,8 +76,7 @@
       (when src
         (let* ([sfd (source-object-sfd src)]
                [path (and sfd (source-file-descriptor-path sfd))])
-          (when (and path
-                     (string=? (path-last path) (path-last filename))) ; HACK
+          (when (and path (string=? filename path)) ; HACK still a hack, but less trouble
             (proc table name uid type src)))))
 
     (when (file-exists? "/tmp/source-map.fasl")
