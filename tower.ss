@@ -671,6 +671,40 @@ order by rank desc, count desc, candidates.name asc"
                          (pre ,(versions->string))))))]))]
              ["/tower"
               (ws:upgrade conn request (spawn&link client))]
+             ["/operations"
+              (http:respond conn 200 '(("Access-Control-Allow-Origin" . "*")
+                                       ("Content-Type" . "application/json"))
+                (let-values ([(op get) (open-bytevector-output-port (make-utf8-transcoder))])
+                  (write-char #\[ op)
+                  (transaction 'log-db
+                    (let ([thunk
+                           (lazy-execute
+                            (ct:join #\space
+                              "select [timestamp]"
+                              ",json_extract(message, '$._op_') as [op]"
+                              ",json_extract(message, '$.time') as [time]"
+                              ",json_extract(message, '$.filename') as [filename]"
+                              "from events"
+                              "where json_valid(message)"
+                              "and [time] is not null"
+                              "order by rowid")
+                            )])
+                      (let lp ([i 0])
+                        (cond
+                         [(thunk) =>
+                          (lambda (row)
+                            (match row
+                              [#(,timestamp ,operation ,elapsed ,filename)
+                               (unless (zero? i)
+                                 (write-char #\, op))
+                               (json:write-object op #f json:write
+                                 [timestamp timestamp]
+                                 [operation operation]
+                                 [elapsed elapsed]
+                                 [filename filename])
+                               (lp (+ i 1))]))]))))
+                  (write-char #\] op)
+                  (get)))]
              [,_ #f])))))
 
   (define (tower:start-server verbose tower-db port-number)
