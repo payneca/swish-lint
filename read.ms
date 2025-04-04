@@ -29,8 +29,8 @@
 (isolate-mat definitions ()
   (define (extract-name str)
     (let ([result #f])
-      (walk-defns-re str 'no-table
-        (lambda (table name source)
+      (walk-defns-re str
+        (lambda (name uid bfp efp)
           (set! result name)))
       result))
 
@@ -76,4 +76,61 @@
              (printf "~a: ~a\n" result expr)
              (throw `#(failed ,result ,expr))]))))
     (library-exports '(scheme)))
+   'ok))
+
+(isolate-mat walk-refs ()
+  (define (extract-name str)
+    (let ([result #f]
+          [annotated-code (read-code str)])
+      (walk-refs annotated-code
+        (lambda (name uid bfp efp)
+          (set! result name)))
+      result))
+
+  (match-let*
+   ([#f (extract-name "12")]
+    [car (extract-name "car")]
+    [car (extract-name "(car)")]
+    [car (extract-name "#%car")]
+    [car (extract-name "#2%car")]
+    [car (extract-name "#3%car")]
+    [`(catch ,_) (try (extract-name "#4%car"))]
+    )
+   'ok))
+
+(isolate-mat walk-refs-positions ()
+  (define (extract-refs str)
+    (let ([result '()])
+      (walk-refs (read-code str)
+        (lambda (name uid bfp efp)
+          (set! result (cons (list name uid bfp efp) result))))
+      (reverse result)))
+  (define (extract-refs-re str)
+    (let ([result '()])
+      (walk-refs-re str
+        (lambda (name uid bfp efp)
+          (set! result (cons (list name uid bfp efp) result))))
+      (reverse result)))
+
+  (match-let*
+   ;; A primitive reference covers its #% or #N% prefix, and its
+   ;; unique id is the name.
+   ([((car #f 0 3)) (extract-refs "car")]
+    [((car "car" 0 5)) (extract-refs "#%car")]
+    [((car "car" 0 6)) (extract-refs "#2%car")]
+    [((car "car" 1 7) (x #f 8 9)) (extract-refs "(#3%car x)")]
+    ;; The explicit form produces no extra reference for the whole
+    ;; expression.
+    [(($primitive #f 1 11) (car #f 12 15)) (extract-refs "($primitive car)")]
+    [(($primitive #f 1 11) (car #f 14 17))
+     (extract-refs "($primitive 2 car)")]
+    ;; For the #%, #2%, and #3% prefixes only, the regexp walker reports
+    ;; the token text as the name and the identifier as the unique id.
+    [(("car" #f 0 3)) (extract-refs-re "car")]
+    [(("#%car" "car" 0 5)) (extract-refs-re "#%car")]
+    [(("#2%car" "car" 0 6)) (extract-refs-re "#2%car")]
+    [(("#3%car" "car" 1 7) ("x" #f 8 9)) (extract-refs-re "(#3%car x)")]
+    [(("1%car" #f 1 6)) (extract-refs-re "#1%car")]
+    [(("4%car" #f 1 6)) (extract-refs-re "#4%car")]
+    [(("%car" #f 2 6)) (extract-refs-re "# %car")])
    'ok))
