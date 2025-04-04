@@ -260,6 +260,15 @@
           [`(annotation ,source [stripped ,name])
            (guard (symbol? name))
            (proc table name source)]
+          [`(annotation ,source [stripped ($primitive . ,prim-info)])
+           (match prim-info
+             [(,name)
+              (guard (symbol? name))
+              (proc table name source)]
+             [(,level ,name)
+              (guard (symbol? name))
+              (proc table name source)]
+             [,_ (void)])]
           [,_ (void)]))))
 
   (define (walk-foldable annotated-code proc)
