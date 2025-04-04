@@ -25,7 +25,6 @@
    annotation
    fp->line
    fp->line/char
-   get-symbol-name
    line/char->fp
    make-code-lookup-table
    read-code
@@ -123,23 +122,6 @@
         [(,_ ,msg . ,_) (values 1 msg)]
         [,_ (values 1 msg)])))
 
-  (define (get-symbol-name x)
-    (define (clean? s)
-      (let ([len (string-length s)])
-        (let lp ([i 0])
-          (cond
-           [(fx= i len) #t]
-           [(char-whitespace? (string-ref s i)) #f]
-           [else (lp (fx1+ i))]))))
-    (cond
-     [(gensym? x) (parameterize ([print-gensym #t]) (format "~s" x))]
-     [(symbol? x)
-      (let ([s (symbol->string x)])
-        (if (clean? s)
-            s
-            (format "|~a|" s)))]
-     [else x]))
-
   (define (read-token-near/col str col1)
     (read-token-near/fp str (fx- col1 1)))
 
@@ -184,18 +166,18 @@
     ;; capture, identifier
     (re (format "\\((?:~a)(~a)" (join (defn-exprs) #\|) identifier)))
 
-  (define (walk-defns-re text table proc)
+  (define (walk-defns-re text proc)
     (define defn-re (defn-regexp))
     (let lp ([start 0])
       (match (pregexp-match-positions defn-re text start)
         [(,_ (,start . ,end))
          (let ([name (substring text start end)])
            (unless (string->number name)
-             (proc table name (cons start end))))
+             (proc name #f start end)))
          (lp end)]
         [,_ (void)])))
 
-  (define (walk-defns annotated-code table proc)
+  (define (walk-defns annotated-code proc)
     (define defines (join (cons "define" (map pregexp-quote (config:definition-keywords))) #\|))
     (define defun-match-regexp
       (re (format "^(?:trace-)?(?:~a)(?:-[\\S]+)?" defines)))
@@ -215,7 +197,12 @@
       (cond
        [(not (symbol? name)) (void)]
        [(not (annotation? name.anno)) (void)]
-       [else (proc table name (annotation-source name.anno))]))
+       [else
+        (let ([src (annotation-source name.anno)])
+          (proc name #f
+            (source-object-bfp src)
+            (source-object-efp src)))]))
+
     (walk-annotations annotated-code
       (lambda (x)
         (match x
@@ -240,24 +227,53 @@
            (guarded name name.anno)]
           [,_ (void)]))))
 
-  (define ref-regexp (re identifier))
+  ;; optional capture, #%, #2%, or #3% primitive prefix
+  ;; capture, identifier
+  (define ref-regexp (re (format "(#[23]?%)?(~a)" identifier)))
 
-  (define (walk-refs-re text table proc)
+  (define (walk-refs-re text proc)
     (let lp ([start 0])
       (match (pregexp-match-positions ref-regexp text start)
-        [((,start . ,end))
-         (let ([name (substring text start end)])
-           (unless (string->number name)
-             (proc table name (cons start end))))
+        [((,start . ,end) ,prefix (,id-start . ,id-end))
+         (let ([id (substring text id-start id-end)])
+           (unless (string->number id)
+             ;; Like walk-refs, a primitive reference covers its prefix,
+             ;; and its unique id is the identifier.
+             (if prefix
+                 (proc (substring text start end) id start end)
+                 (proc id #f start end))))
          (lp end)]
         [#f (void)])))
 
-  (define (walk-refs annotated-code table proc)
+  (define (walk-refs annotated-code proc)
+    ;; proc receives the name, a unique id string or #f when the id is
+    ;; the source text, and the bfp and efp of its source.
+    (define (guarded name uid source)
+      (proc name uid
+        (source-object-bfp source)
+        (source-object-efp source)))
     (walk-annotations annotated-code
       (lambda (x)
         (match x
           [`(annotation ,source [stripped ,name])
            (guard (symbol? name))
-           (proc table name source)]
+           (guarded name #f source)]
+          ;; Reader syntax #%name or #N%name produces a single
+          ;; annotation whose expression is not annotated. Its source
+          ;; includes the prefix, so its unique id is the name; then
+          ;; all references to a primitive share an id. The explicit
+          ;; form ($primitive name) has annotated subexpressions, which
+          ;; are visited on their own.
+          [`(annotation ,source
+              [stripped ($primitive . ,prim-info)]
+              [expression ($primitive . ,_)])
+           (match prim-info
+             [(,name)
+              (guard (symbol? name))
+              (guarded name (symbol->string name) source)]
+             [(,level ,name)
+              (guard (symbol? name))
+              (guarded name (symbol->string name) source)]
+             [,_ (void)])]
           [,_ (void)]))))
   )

@@ -607,6 +607,25 @@
           [() (get-defns uri1 0 20)])
          'ok)
 
+        ;; References to primitives via #%name and #N%name are
+        ;; references to name, and their range covers the prefix.
+        (did-change uri1
+          (code
+           "(car x)"
+           "(#%car x)"
+           "(#2%car x)"))
+        (wait-for-test-sync uri1)
+        (match-let*
+         ([,car-ref1 `(,uri1 from 0 1 to 0 4)]
+          [,car-ref2 `(,uri1 from 1 1 to 1 6)]
+          [,car-ref3 `(,uri1 from 2 1 to 2 7)]
+          [(,@car-ref1 ,@car-ref2 ,@car-ref3) (get-local-refs uri1 0 1)]
+          [(,@car-ref1 ,@car-ref2 ,@car-ref3) (get-local-refs uri1 1 1)]
+          [(,@car-ref1 ,@car-ref2 ,@car-ref3) (get-local-refs uri1 1 3)]
+          [(,@car-ref1 ,@car-ref2 ,@car-ref3) (get-local-refs uri1 2 1)]
+          [(,@car-ref1 ,@car-ref2 ,@car-ref3) (get-local-refs uri1 2 4)])
+         'ok)
+
         (for-each did-close uris)
         'ok))))
 
