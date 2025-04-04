@@ -77,3 +77,23 @@
              (throw `#(failed ,result ,expr))]))))
     (library-exports '(scheme)))
    'ok))
+
+(isolate-mat walk-refs ()
+  (define (extract-name str)
+    (let ([result #f]
+          [annotated-code (read-code str)])
+      (walk-refs annotated-code 'no-table
+        (lambda (table name source)
+          (set! result name)))
+      result))
+
+  (match-let*
+   ([#f (extract-name "12")]
+    [car (extract-name "car")]
+    [car (extract-name "(car)")]
+    [car (extract-name "#%car")]
+    [car (extract-name "#2%car")]
+    [car (extract-name "#3%car")]
+    [`(catch ,_) (try (extract-name "#4%car"))]
+    )
+   'ok))
