@@ -290,45 +290,48 @@
           [refs (make-hashtable string-hash string=?)])
       (define (key name line char)
         (format "~a:~a:~a" name line char))
-      (define (try-walk who walk code get-bfp meta)
+      (define (try-walk who walk code get-bfp get-efp meta)
         (match
          (try
           (walk code source-table
             (lambda (table name source)
-              (let-values ([(line char) (fp->line/char table (get-bfp source))])
-                (let ([new (json:make-object
-                            [name (get-symbol-name name)]
-                            [line line]
-                            [char char]
-                            [meta meta])])
-                  (hashtable-update! refs (key name line char)
-                    (lambda (old)
-                      (if old
-                          (json:merge old new)
-                          new))
-                    #f))))))
+              (let ([bfp (get-bfp source)]
+                    [efp (get-efp source)])
+                (let-values ([(line char) (fp->line/char table bfp)])
+                  (let ([new (json:make-object
+                              [name (get-symbol-name name)]
+                              [line line]
+                              [char char]
+                              [len (- efp bfp)]
+                              [meta meta])])
+                    (hashtable-update! refs (key name line char)
+                      (lambda (old)
+                        (if old
+                            (json:merge old new)
+                            new))
+                      #f)))))))
          [`(catch ,reason)
           (trace-expr `(,who => ,(exit-reason->english reason)))
           #f]
          [,_ #t]))
       (define (defns-anno)
         (and annotated-code
-             (try-walk 'walk-defns walk-defns annotated-code source-object-bfp
+             (try-walk 'walk-defns walk-defns annotated-code source-object-bfp source-object-efp
                (json:make-object
                 [definition 1]
                 [anno-pass 1]))))
       (define (defns-re)
-        (try-walk 'walk-defns-re walk-defns-re text car
+        (try-walk 'walk-defns-re walk-defns-re text car cdr
           (json:make-object
            [definition 1]
            [regexp-pass 1])))
       (define (refs-anno)
         (and annotated-code
-             (try-walk 'walk-refs walk-refs annotated-code source-object-bfp
+             (try-walk 'walk-refs walk-refs annotated-code source-object-bfp source-object-efp
                (json:make-object
                 [anno-pass 1]))))
       (define (refs-re)
-        (try-walk 'walk-refs-re walk-refs-re text car
+        (try-walk 'walk-refs-re walk-refs-re text car cdr
           (json:make-object
            [regexp-pass 1])))
       (or (defns-anno) (defns-re))
