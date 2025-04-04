@@ -282,7 +282,8 @@
         [keywords keywords])])))
 
   (define (tower-client:update-references filename refs)
-    ;; Refs is a list of JSON objects containing: name, line, char, meta
+    ;; Refs is a list of JSON objects containing: name, line, char, len,
+    ;; meta, and optionally uid. Without a uid, the tower uses the name.
     (tower-client:call
      (json:make-object
       [method "update-references"]
