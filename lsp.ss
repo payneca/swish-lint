@@ -290,16 +290,24 @@
           [refs (make-hashtable string-hash string=?)])
       (define (key name line char)
         (format "~a:~a:~a" name line char))
-      (define (try-walk who walk code get-bfp meta)
+      (define (try-walk who walk code meta)
         (match
          (try
-          (walk code source-table
-            (lambda (table name source)
-              (let-values ([(line char) (fp->line/char table (get-bfp source))])
+          (walk code
+            (lambda (name bfp efp)
+              (let-values ([(line char) (fp->line/char source-table bfp)])
                 (let ([new (json:make-object
-                            [name (get-symbol-name name)]
+                            ;; For the walkers that pre-computed the
+                            ;; string based on bfp/efp, use that
+                            ;; string. Otherwise, avoid gensym
+                            ;; complications just extract the
+                            ;; substring.
+                            [name (if (string? name)
+                                      name
+                                      (substring text bfp efp))]
                             [line line]
                             [char char]
+                            [len (- efp bfp)]
                             [meta meta])])
                   (hashtable-update! refs (key name line char)
                     (lambda (old)
@@ -313,22 +321,22 @@
          [,_ #t]))
       (define (defns-anno)
         (and annotated-code
-             (try-walk 'walk-defns walk-defns annotated-code source-object-bfp
+             (try-walk 'walk-defns walk-defns annotated-code
                (json:make-object
                 [definition 1]
                 [anno-pass 1]))))
       (define (defns-re)
-        (try-walk 'walk-defns-re walk-defns-re text car
+        (try-walk 'walk-defns-re walk-defns-re text
           (json:make-object
            [definition 1]
            [regexp-pass 1])))
       (define (refs-anno)
         (and annotated-code
-             (try-walk 'walk-refs walk-refs annotated-code source-object-bfp
+             (try-walk 'walk-refs walk-refs annotated-code
                (json:make-object
                 [anno-pass 1]))))
       (define (refs-re)
-        (try-walk 'walk-refs-re walk-refs-re text car
+        (try-walk 'walk-refs-re walk-refs-re text
           (json:make-object
            [regexp-pass 1])))
       (or (defns-anno) (defns-re))

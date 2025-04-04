@@ -393,16 +393,19 @@ order by rank desc, count desc, candidates.name asc"
            (db:log 'log-db "delete from refs where file_fk=?" file-fk)
            (for-each
             (lambda (ref)
-              (let ([meta (json:get ref 'meta)]
-                    [name (coerce (json:get ref 'name))])
+              (let* ([meta (json:get ref 'meta)]
+                     [name (coerce (json:get ref 'name))]
+                     [len (json:get ref 'len)]
+                     [uid (json:ref ref 'uid #f)]
+                     [uid (or (and uid (coerce uid)) name)])
                 (db:log 'log-db "insert into refs(timestamp,root_fk,file_fk,pre1,name,len,uid,type,line,char,meta) values(?,?,?,?,?,?,?,?,?,?,?)"
                   (coerce start)
                   (coerce root-fk)
                   (coerce file-fk)
                   (coerce (prefix-integer name))
                   name
-                  (string-length name)
-                  name ; TODO proper identifier (maybe from the json input)
+                  len
+                  uid
                   (coerce (and (= (json:ref meta 'definition 0) 1)
                                "defn"))
                   (coerce (json:get ref 'line))

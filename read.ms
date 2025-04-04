@@ -29,8 +29,8 @@
 (isolate-mat definitions ()
   (define (extract-name str)
     (let ([result #f])
-      (walk-defns-re str 'no-table
-        (lambda (table name source)
+      (walk-defns-re str
+        (lambda (name bfp efp)
           (set! result name)))
       result))
 
@@ -82,8 +82,8 @@
   (define (extract-name str)
     (let ([result #f]
           [annotated-code (read-code str)])
-      (walk-refs annotated-code 'no-table
-        (lambda (table name source)
+      (walk-refs annotated-code
+        (lambda (name bfp efp)
           (set! result name)))
       result))
 

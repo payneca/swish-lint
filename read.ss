@@ -25,7 +25,6 @@
    annotation
    fp->line
    fp->line/char
-   get-symbol-name
    line/char->fp
    make-code-lookup-table
    read-code
@@ -123,23 +122,6 @@
         [(,_ ,msg . ,_) (values 1 msg)]
         [,_ (values 1 msg)])))
 
-  (define (get-symbol-name x)
-    (define (clean? s)
-      (let ([len (string-length s)])
-        (let lp ([i 0])
-          (cond
-           [(fx= i len) #t]
-           [(char-whitespace? (string-ref s i)) #f]
-           [else (lp (fx1+ i))]))))
-    (cond
-     [(gensym? x) (parameterize ([print-gensym #t]) (format "~s" x))]
-     [(symbol? x)
-      (let ([s (symbol->string x)])
-        (if (clean? s)
-            s
-            (format "|~a|" s)))]
-     [else x]))
-
   (define (read-token-near/col str col1)
     (read-token-near/fp str (fx- col1 1)))
 
@@ -184,18 +166,18 @@
     ;; capture, identifier
     (re (format "\\((?:~a)(~a)" (join (defn-exprs) #\|) identifier)))
 
-  (define (walk-defns-re text table proc)
+  (define (walk-defns-re text proc)
     (define defn-re (defn-regexp))
     (let lp ([start 0])
       (match (pregexp-match-positions defn-re text start)
         [(,_ (,start . ,end))
          (let ([name (substring text start end)])
            (unless (string->number name)
-             (proc table name (cons start end))))
+             (proc name start end)))
          (lp end)]
         [,_ (void)])))
 
-  (define (walk-defns annotated-code table proc)
+  (define (walk-defns annotated-code proc)
     (define defines (join (cons "define" (map pregexp-quote (config:definition-keywords))) #\|))
     (define defun-match-regexp
       (re (format "^(?:trace-)?(?:~a)(?:-[\\S]+)?" defines)))
@@ -215,7 +197,11 @@
       (cond
        [(not (symbol? name)) (void)]
        [(not (annotation? name.anno)) (void)]
-       [else (proc table name (annotation-source name.anno))]))
+       [else
+        (let ([src (annotation-source name.anno)])
+          (proc name
+            (source-object-bfp src)
+            (source-object-efp src)))]))
     (walk-annotations annotated-code
       (lambda (x)
         (match x
@@ -242,31 +228,35 @@
 
   (define ref-regexp (re identifier))
 
-  (define (walk-refs-re text table proc)
+  (define (walk-refs-re text proc)
     (let lp ([start 0])
       (match (pregexp-match-positions ref-regexp text start)
         [((,start . ,end))
          (let ([name (substring text start end)])
            (unless (string->number name)
-             (proc table name (cons start end))))
+             (proc name start end)))
          (lp end)]
         [#f (void)])))
 
-  (define (walk-refs annotated-code table proc)
+  (define (walk-refs annotated-code proc)
+    (define (guarded name source)
+      (proc name
+        (source-object-bfp source)
+        (source-object-efp source)))
     (walk-annotations annotated-code
       (lambda (x)
         (match x
           [`(annotation ,source [stripped ,name])
            (guard (symbol? name))
-           (proc table name source)]
+           (guarded name source)]
           [`(annotation ,source [stripped ($primitive . ,prim-info)])
            (match prim-info
              [(,name)
               (guard (symbol? name))
-              (proc table name source)]
+              (guarded name source)]
              [(,level ,name)
               (guard (symbol? name))
-              (proc table name source)]
+              (guarded name source)]
              [,_ (void)])]
           [,_ (void)]))))
   )
