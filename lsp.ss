@@ -299,6 +299,11 @@
                     [efp (get-efp source)])
                 (let-values ([(line char) (fp->line/char table bfp)])
                   (let ([new (json:make-object
+                              ;; TODO Why do we pass name in from the
+                              ;; walker. Can we just do substring here
+                              ;; using bfp/efp? Also, multi-line
+                              ;; tokens -- do we need to convert and
+                              ;; store the end line and end char too?
                               [name (get-symbol-name name)]
                               [line line]
                               [char char]
