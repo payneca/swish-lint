@@ -101,11 +101,16 @@
     [,op1 (binary->utf8 op1)]
     [,ip2 (binary->utf8 ip2)]
     [,op2 (binary->utf8 op2)]
-    [#(ok ,_) (supervisor:start&link 'main-sup 'one-for-all 0 1
-                (append
-                 (make-swish-sup-spec (list swish-event-logger))
-                 (tower:sup-spec 0)
-                 (lsp:sup-spec #f ip1 op2 #t)))]
+    [(,tp ,get-trace)
+     (let-values ([(p get) (open-string-output-port)])
+       (list p get))]
+    [#(ok ,_)
+     (parameterize ([trace-output-port tp])
+       (supervisor:start&link 'main-sup 'one-for-all 0 1
+         (append
+          (make-swish-sup-spec (list swish-event-logger))
+          (tower:sup-spec 0)
+          (lsp:sup-spec #f ip1 op2 #t))))]
     [#(ok ,rpc) (rpc-client:start&link 'rpc
                   (lambda (msg)
                     ;;(json:write (trace-output-port) msg 0)
