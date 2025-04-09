@@ -36,7 +36,15 @@
  (tower)
  (tower-client))
 
-(define tower-port-number 51342)
+(define tower-port-number
+  (cond
+   [(getenv "SWISH_LINT_PORT") =>
+    (lambda (s)
+      (let ([port (string->number s)])
+        (when (not (and port (fixnum? port) (< 0 port 65536)))
+          (errorf #f "SWISH_LINT_PORT must be an integer greater than 0"))
+        port))]
+   [else 51342]))
 
 (define cli
   (cli-specs
@@ -79,6 +87,7 @@
     (trace-output-port (console-output-port))
     (display (versions->string))
     (newline)
+    (fprintf (trace-output-port) "Tower URL: http://localhost:~a/\n" tower-port-number)
     (output-env)
     (config:load-user)
     (newline)
