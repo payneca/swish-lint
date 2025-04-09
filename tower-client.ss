@@ -125,6 +125,7 @@
             (throw `#(unhandled-message ,x)))
           res)]))
     (define (init)
+      (fprintf (trace-output-port) "Tower URL: http://localhost:~a/\n" port-number)
       `#(ok ,(<tower-client> make
                [ws #f]
                [id 0]
