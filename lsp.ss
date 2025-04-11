@@ -337,6 +337,11 @@
                       (let ([new-meta (hashtable-copy meta #t)])
                         (json:extend-object new-meta
                           [type (coerce type)])
+                        (match type
+                          [bind
+                           (json:extend-object new-meta
+                             [definition 1])]
+                          [,_ (void)])
                         (json:extend-object new
                           [meta new-meta])))
                     (hashtable-update! refs (key name line char)

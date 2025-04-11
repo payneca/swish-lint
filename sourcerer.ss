@@ -94,7 +94,7 @@
                       [`(lexical-info ,name ,bind-src ,ref-src* ,set-src*)
                        (define uid (get-uid info name))
                        (define (ref! src) (guarded 'lexical name uid src))
-                       (ref! bind-src)
+                       (guarded 'bind name uid bind-src)
                        (for-each ref! ref-src*)
                        (for-each ref! set-src*)]))
                   data)
@@ -131,14 +131,15 @@
                     (match info
                       [`(syntax-info ,name ,bind-src ,ref-src*)
                        (define uid (get-uid info name))
+                       (define (protect src)
+                         (cond
+                          ;; Built in syntax are marked. For now,
+                          ;; pretend like we just don't have source.
+                          [(eq? src 'built-in) #f]
+                          [else src]))
                        (define (ref! src)
-                         (guarded 'syntax name uid
-                           (cond
-                            ;; Built in syntax are marked. For now,
-                            ;; pretend like we just don't have source.
-                            [(eq? src 'built-in) #f]
-                            [else src])))
-                       (ref! bind-src)
+                         (guarded 'syntax name uid (protect src)))
+                       (guarded 'bind name uid (protect bind-src))
                        (for-each ref! ref-src*)]))
                   data)
                  (lp)]
