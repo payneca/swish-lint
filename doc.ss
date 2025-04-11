@@ -54,18 +54,19 @@
        (trace-time `(get-value-near ,line1 ,char1)
          (let* ([cursor (cursor:goto-line! ($state cursor) (fx- line1 1))]
                 [text (line-str (cursor-line cursor))])
+           (define (->string value bfp efp)
+             (let ([offset (match value
+                             [,_ (guard (symbol? value)) 0]
+                             [($primitive ,value) 2]
+                             [($primitive ,_ ,value) 3]
+                             [,_ #f])])
+               (and offset
+                    (substring text (+ bfp offset) efp))))
            (match (try
                    (let-values ([(type value bfp efp)
                                  (read-token-near/col text char1)])
                      (and (eq? type 'atomic)
-                          (match value
-                            [,_ (guard (symbol? value))
-                             (get-symbol-name value)]
-                            [($primitive ,value)
-                             (get-symbol-name value)]
-                            [($primitive ,_ ,value)
-                             (get-symbol-name value)]
-                            [,_ #f]))))
+                          (->string value bfp efp))))
              [`(catch ,reason)
               (trace-expr
                `(get-value-near ,line1 ,char1 => ,(exit-reason->english reason)))
