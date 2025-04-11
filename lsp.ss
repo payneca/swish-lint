@@ -324,7 +324,7 @@
                               ;; using bfp/efp? Also, multi-line
                               ;; tokens -- do we need to convert and
                               ;; store the end line and end char too?
-                              [name (get-symbol-name name)]
+                              [name (substring text bfp efp)]
                               [line line]
                               [char char]
                               [len (- efp bfp)]

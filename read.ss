@@ -25,7 +25,6 @@
    annotation
    fp->line
    fp->line/char
-   get-symbol-name
    line/char->fp
    make-code-lookup-table
    read-code
@@ -123,23 +122,6 @@
           msg)]
         [(,_ ,msg . ,_) (values 1 msg)]
         [,_ (values 1 msg)])))
-
-  (define (get-symbol-name x)
-    (define (clean? s)
-      (let ([len (string-length s)])
-        (let lp ([i 0])
-          (cond
-           [(fx= i len) #t]
-           [(char-whitespace? (string-ref s i)) #f]
-           [else (lp (fx1+ i))]))))
-    (cond
-     [(gensym? x) (parameterize ([print-gensym #t]) (format "~s" x))]
-     [(symbol? x)
-      (let ([s (symbol->string x)])
-        (if (clean? s)
-            s
-            (format "|~a|" s)))]
-     [else x]))
 
   (define (read-token-near/col str col1)
     (read-token-near/fp str (fx- col1 1)))
