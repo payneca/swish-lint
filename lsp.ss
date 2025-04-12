@@ -309,8 +309,8 @@
   (define (do-update-refs uri text annotated-code source-table)
     (let ([filename (uri->abs-path uri)]
           [refs (make-hashtable string-hash string=?)])
-      (define (key name line char)
-        (format "~a:~a:~a" name line char))
+      (define (key type name line char)
+        (format "~a:~a:~a:~a" type name line char))
       (define (try-walk who walk code get-bfp get-efp meta)
         (match
          (try
@@ -328,9 +328,11 @@
                               [name (substring text bfp efp)]
                               [line line]
                               [char char]
+                              [bfp bfp]
+                              [efp efp]
                               [len (- efp bfp)]
                               [meta meta])])
-                    (when uid
+                    (when (and uid (not (eq? type 'global)))
                       (json:extend-object new
                         [uid uid]))
                     (when type ; HACK This isn't the right thing to do. Maybe delete after we get some confidence.
@@ -341,10 +343,13 @@
                           [bind
                            (json:extend-object new-meta
                              [definition 1])]
+                          [global
+                           (json:extend-object new-meta
+                             [global-uid uid])]
                           [,_ (void)])
                         (json:extend-object new
                           [meta new-meta])))
-                    (hashtable-update! refs (key name line char)
+                    (hashtable-update! refs (key type name line char)
                       (lambda (old)
                         (if old
                             (json:merge old new)
@@ -382,7 +387,8 @@
       ;;(or (refs-anno) (refs-re))
       (refs-sourcerer)
       (tower-client:update-references filename
-        (vector->list (hashtable-values refs)))
+        (vector->list (hashtable-values refs))
+        (vector->list source-table))
       (event-mgr:notify (cons 'test-sync uri))))
 
   (define (spawn-update-refs uri annotated-code source-table text)

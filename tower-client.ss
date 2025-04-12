@@ -281,7 +281,7 @@
        (json:make-object
         [keywords keywords])])))
 
-  (define (tower-client:update-references filename refs)
+  (define (tower-client:update-references filename refs line-fps)
     ;; Refs is a list of JSON objects containing: name, line, char, meta
     (tower-client:call
      (json:make-object
@@ -289,7 +289,8 @@
       [params
        (json:make-object
         [filename filename]
-        [references refs])])))
+        [references refs]
+        [line-fps line-fps])])))
 
   (define (tower-client:shutdown-server)
     (tower-client:call

@@ -5,7 +5,9 @@
    )
   (import
    (chezscheme)
+   (read)
    (swish imports)
+   (trace)
    )
   ;; TODO decide out how to provide access to compatible record types for client's use
   (define-record-type lexical-info
@@ -49,7 +51,7 @@
      (immutable bound*)))
 
   (define-record-type realm
-    (nongenerative #{realm ble5klpzns025alnatm0ydav9-5})
+    (nongenerative #{realm dk0h38d9wcwydof3f2dgd7w9h-0})
     (fields
      (immutable src)
      (immutable name)
@@ -57,7 +59,8 @@
      (immutable version)
      (immutable meta-level)
      (immutable export*)
-     (immutable import*)))
+     (immutable import*)
+     (immutable export-id*)))
 
   (define (sourcerer:walk-refs filename table proc)
     (define ->uid (make-eq-hashtable))
@@ -119,7 +122,7 @@
                   (lambda (info)
                     (match info
                       [`(prim-info ,name ,ref2-src* ,ref3-src*)
-                       (define uid (get-uid info name))
+                       (define uid (format "~s" name))
                        (define (ref! src) (guarded 'prim name uid src))
                        (for-each ref! ref2-src*)
                        (for-each ref! ref3-src*)]))
@@ -143,5 +146,27 @@
                        (for-each ref! ref-src*)]))
                   data)
                  (lp)]
-                [,_ (lp)])))))))
+                [realm
+                 (for-each
+                  (lambda (info)
+                    (match info
+                      [`(realm ,export-id*)
+                       (for-each
+                        (lambda (ex)
+                          (match ex
+                            [(,name . `(annotation ,source ,stripped))
+                             (define uid (format "~s" name))
+                             (let ([name (parameterize ([print-gensym #f]) (format "~s" name))])
+                               (guarded 'global name uid source))]
+                            #;[(,global-name . ,lexical-name)
+                               (define uid (format "~s" global-name))
+                               (guarded 'global lexical-name uid #f)]
+                            [,_ (trace-expr `(unhandled-realm-export-id* ,ex))]
+                            ))
+                        export-id*)]))
+                  data)
+                 (lp)]
+                [contour (lp)]
+                [imports-ht (lp)]
+                [alias (lp)])))))))
   )

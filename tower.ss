@@ -382,14 +382,17 @@ order by rank desc, count desc, candidates.name asc"
       [update-references
        (let ([filename (json:get msg '(params filename))]
              [refs (json:get msg '(params references))]
+             [line-fps (json:get msg '(params line-fps))]
              [root-fk (root-key)]
              [start (erlang:now)])
          (assert (path-absolute? filename))
          (db:log 'log-db "insert into files (timestamp,filename) values (?,?) on conflict(filename) do update set timestamp=excluded.timestamp"
            (coerce start)
            (coerce filename))
+
          (let ([file-fk (transaction 'log-db
                           (scalar (execute "select file_pk from files where filename=?" filename)))])
+           (db:log 'log-db "delete from sources where file_fk=?" file-fk)
            (db:log 'log-db "delete from refs where file_fk=?" file-fk)
            (for-each
             (lambda (ref)
@@ -397,8 +400,14 @@ order by rank desc, count desc, candidates.name asc"
                      [name (coerce (json:get ref 'name))]
                      [len (json:get ref 'len)]
                      [uid (json:ref ref 'uid #f)]
-                     [uid (or (and uid (coerce uid)) name)])
-                (db:log 'log-db "insert into refs(timestamp,root_fk,file_fk,pre1,name,len,uid,type,line,char,meta) values(?,?,?,?,?,?,?,?,?,?,?)"
+                     [uid (or (and uid (coerce uid)) name)]
+                     [bfp (json:get ref 'bfp)]
+                     [efp (json:get ref 'efp)])
+                (db:log 'log-db "insert into sources(file_fk,bfp,efp) values(?,?,?)"
+                  (coerce file-fk)
+                  (coerce bfp)
+                  (coerce efp))
+                (db:log 'log-db "insert into refs(timestamp,root_fk,file_fk,pre1,name,len,uid,type,line,char,meta,source_fk) values(?,?,?,?,?,?,?,?,?,?,?, (select source_pk from sources where file_fk=? and bfp=? and efp=?))"
                   (coerce start)
                   (coerce root-fk)
                   (coerce file-fk)
@@ -410,8 +419,22 @@ order by rank desc, count desc, candidates.name asc"
                                "defn"))
                   (coerce (json:get ref 'line))
                   (coerce (json:get ref 'char))
-                  (coerce meta))))
-            refs))
+                  (coerce meta)
+                  (coerce file-fk)
+                  (coerce bfp)
+                  (coerce efp)
+                  )))
+            refs)
+           (db:log 'log-db "delete from line_fps where file_fk=?" file-fk)
+           (let lp ([line-fps line-fps] [line 1])
+             (match line-fps
+               [() (void)]
+               [(,fp . ,rest)
+                (db:log 'log-db "insert into line_fps(file_fk,line,fp) values(?,?,?)"
+                  (coerce file-fk)
+                  (coerce line)
+                  (coerce fp))
+                (lp rest (+ line 1))])))
          (unless (< (verbosity) 1)
            (transaction 'log-db
              (do-log 1
@@ -530,10 +553,15 @@ order by rank desc, count desc, candidates.name asc"
         [timestamp integer]
         [keyword text]
         [meta text])
+      (create-table line_fps
+        [file_fk integer]
+        [line integer]
+        [fp integer])
       (create-table refs
         [timestamp integer]
         [root_fk integer]
         [file_fk integer]
+        [source_fk integer]
         [pre1 integer]
         [name text]
         [len integer]                   ; precomputed string-length
@@ -550,6 +578,16 @@ order by rank desc, count desc, candidates.name asc"
         [path text]
         [meta text])
 
+      (execute
+       (ct:join #\space
+         "create table if not exists [sources] ("
+         "[source_pk] integer primary key autoincrement,"
+         "[file_fk] integer,"
+         "[bfp] integer,"
+         "[efp] integer,"
+         "unique([file_fk],[bfp],[efp])"
+         "on conflict ignore)"))
+
       (create-prune-on-insert-trigger 'events 'timestamp 1 10)
       (create-index 'events_timestamp "events(timestamp)")
 
@@ -558,7 +596,50 @@ order by rank desc, count desc, candidates.name asc"
       (create-index 'refs_root "refs(root_fk)")
       (create-index 'refs_file "refs(file_fk)")
       (create-index 'refs_pre1 "refs(pre1)")
-      (create-index 'refs_type "refs(type)"))
+      (create-index 'refs_type "refs(type)")
+
+      (create-index 'line_fps_file_line "line_fps(file_fk,line)")
+      (execute "drop view if exists v_lines")
+
+      ;; TODO need to decide if efps are inclusive or exclusive
+      (execute
+       (ct:join #\space
+         "create view v_lines as"
+         "select A.file_fk, A.line, A.fp as bfp, B.fp-1 as efp"
+         "from line_fps A"
+         "inner join line_fps B on A.line = B.line-1 and A.file_fk=B.file_fk"))
+
+      #|
+Heading for something like this:
+
+select L.*, S.*
+from sources S, v_lines L
+where S.rowid=1
+  and S.file_fk = L.file_fk
+  and L.bfp <= S.bfp and S.bfp <= L.efp
+
+Or this:
+
+select R.*, S.*, L.*, S.bfp - L.bfp + 1 as [char]
+from refs R, sources S, v_lines L
+where S.source_pk < 10
+  and R.source_fk = S.source_pk
+  and L.file_fk=S.file_fk
+  and L.bfp <= S.bfp and S.bfp <= L.efp
+
+Details for a single file:
+
+select F.filename, R.*, S.*, L.*, S.bfp - L.bfp + 1 as [char]
+from refs R, sources S, v_lines L, files F
+where R.file_fk=3
+  and F.file_pk = R.file_fk
+  and R.source_fk = S.source_pk
+  and L.file_fk=S.file_fk
+  and L.bfp <= S.bfp and S.bfp <= L.efp
+order by R.line
+
+|#
+      )
     (define (upgrade-db)
       (match (log-db:version schema-name)
         [,@schema-version 'ok]
