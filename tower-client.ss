@@ -29,6 +29,7 @@
    tower-client:get-definitions
    tower-client:get-local-references
    tower-client:get-references
+   tower-client:import
    tower-client:log
    tower-client:reset-directory
    tower-client:shutdown-server
@@ -209,7 +210,7 @@
     (gen-server:start&link 'tower-client))
 
   (define (tower-client:call msg)
-    (gen-server:call 'tower-client `#(call ,msg)))
+    (gen-server:call 'tower-client `#(call ,msg) 10000))
 
   (define (tower-client:cast msg)
     (gen-server:cast 'tower-client `#(cast ,msg)))
@@ -254,6 +255,14 @@
         [filename filename]
         [line line]
         [char char])])))
+
+  (define (tower-client:import filename)
+    (tower-client:call
+     (json:make-object
+      [method "import"]
+      [params
+       (json:make-object
+        [filename filename])])))
 
   (define (tower-client:log msg)
     (tower-client:cast

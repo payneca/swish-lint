@@ -42,7 +42,6 @@
    (read)
    (semtok)
    (software-info)
-   (sourcerer)
    (swish imports)
    (tower-client)
    (trace)
@@ -379,14 +378,14 @@
         (try-walk 'walk-refs-re walk-refs-re text car cdr
           (json:make-object
            [regexp-pass 1])))
-      (define (refs-sourcerer)
+      #;(define (refs-sourcerer)
         (try-walk 'sourcerer:walk-refs sourcerer:walk-refs filename source-object-bfp source-object-efp
           (json:make-object
            [sourcerer-pass 1])))
       ;;(or (defns-anno) (defns-re))
       ;;(or (refs-anno) (refs-re))
-      (refs-sourcerer)
-      (tower-client:update-references filename
+      ;;(refs-sourcerer)
+      #;(tower-client:update-references filename
         (vector->list (hashtable-values refs))
         (vector->list source-table))
       (event-mgr:notify (cons 'test-sync uri))))
