@@ -10,58 +10,7 @@
    (swish imports)
    (trace)
    )
-  ;; TODO decide out how to provide access to compatible record types for client's use
-  (define-record-type lexical-info
-    (nongenerative #{lexical-info ble5klpzns025alnatm0ydav9-0})
-    (fields
-     (immutable name)
-     (immutable bind-src)
-     (mutable ref-src*)
-     (mutable set-src*)))
-
-  ;; TODO do we care about meta-level for globals?
-  (define-record-type global-info
-    (nongenerative #{global-info ble5klpzns025alnatm0ydav9-1})
-    (fields
-     (immutable name)
-     (mutable ref-src*)
-     (mutable set-src*)))
-
-  ;; TODO better names? don't want to confuse with make-priminfo elsewhere
-  (define-record-type prim-info
-    (nongenerative #{prim-info a9h3n8t2pis427wy51x6e77bg-0})
-    (fields
-     (immutable name)
-     (mutable ref2-src*)
-     (mutable ref3-src*)))
-
-  (define-record-type syntax-info
-    (nongenerative #{syntax-info ble5klpzns025alnatm0ydav9-3})
-    (fields
-     (immutable name)
-     (immutable bind-src)
-     (immutable meta-level)
-     (mutable ref-src*)))
-
-  (define-record-type contour
-    (nongenerative #{contour ble5klpzns025alnatm0ydav9-4})
-    (fields
-     (immutable src)
-     (immutable type)
-     (immutable meta-level)
-     (immutable bound*)))
-
-  (define-record-type realm
-    (nongenerative #{realm dk0h38d9wcwydof3f2dgd7w9h-0})
-    (fields
-     (immutable src)
-     (immutable name)
-     (immutable path)
-     (immutable version)
-     (immutable meta-level)
-     (immutable export*)
-     (immutable import*)
-     (immutable export-id*)))
+  (include "hack-record-types.ss")
 
   (define (sourcerer:walk-refs filename table proc)
     (define ->uid (make-eq-hashtable))
@@ -83,15 +32,17 @@
           (when (and path (string=? filename path)) ; HACK still a hack, but less trouble
             (proc table name uid type src)))))
 
-    (when (file-exists? "/tmp/source-map.fasl")
-      (let ([ip (open-binary-file-to-read "/tmp/source-map.fasl")])
+    (when (file-exists? "/tmp/bolus.fasl")
+      (let ([ip (open-binary-file-to-read "/tmp/bolus.fasl")])
         (on-exit (close-port ip)
           (let lp ()
             (let* ([cat (fasl-read ip)]
                    [data (fasl-read ip)])
               (match cat
                 [#!eof (void)]
-                [lexical
+                [,_
+                 (printf "unhandled category: ~s\n" cat)]
+                #;[lexical
                  (vector-for-each
                   (lambda (info)
                     (match info
@@ -103,7 +54,7 @@
                        (for-each ref! set-src*)]))
                   data)
                  (lp)]
-                [global
+                #;[global
                  (vector-for-each
                   (lambda (info)
                     (match info
@@ -118,7 +69,7 @@
                          (for-each ref! set-src*))]))
                   data)
                  (lp)]
-                [prim
+                #;[prim
                  (vector-for-each
                   (lambda (info)
                     (match info
@@ -129,7 +80,7 @@
                        (for-each ref! ref3-src*)]))
                   data)
                  (lp)]
-                [syntax
+                #;[syntax
                  (vector-for-each
                   (lambda (info)
                     (match info
@@ -147,7 +98,7 @@
                        (for-each ref! ref-src*)]))
                   data)
                  (lp)]
-                [realm
+                #;[realm
                  (for-each
                   (lambda (info)
                     (match info
@@ -167,20 +118,22 @@
                         export-id*)]))
                   data)
                  (lp)]
-                [contour (lp)]
-                [imports-ht (lp)]
-                [alias (lp)])))))))
+                #;[contour (lp)]
+                #;[imports-ht (lp)]
+                #;[alias (lp)])))))))
 
-  (define (process-file filename p)
-    (when (file-exists? filename)
-      (let ([ip (open-binary-file-to-read filename)])
-        (on-exit (close-port ip)
-          (let lp ()
-            (let* ([cat (fasl-read ip)]
-                   [data (fasl-read ip)])
-              (unless (eof-object? cat)
-                (p cat data)
-                (lp))))))))
+(define-tuple <sm>
+    st-dump
+    prim*
+    node*
+    rubbish
+    )
+
+  (define (load-source-map filename)
+    (and (file-exists? filename)
+         (let ([ip (open-binary-file-to-read filename)])
+           (on-exit (close-port ip)
+             (fasl-read ip)))))
 
   (define (sourcerer:import filename)
     #|
@@ -239,10 +192,18 @@ order by count(*) desc
             (coerce name) (coerce ref-type) (coerce type) src-fk))))
 
     (transaction 'log-db
-      (process-file filename
+      (match (load-source-map filename)
+        [#f (void)]
+        [#!eof (void)]
+        [`(<sm> ,source-table ,prims ,keys ,rubbish)
+
+         (throw (list source-table prims keys rubbish))
+
+         #;
+         (process-file filename
         (lambda (cat data)
           (match cat
-            [lexical
+            #;[lexical
              (vector-for-each
               (lambda (info)
                 (match info
@@ -251,7 +212,7 @@ order by count(*) desc
                    (for-each (lambda (src) (add-ref name 'lexical 'ref src)) ref-src*)
                    (for-each (lambda (src) (add-ref name 'lexical 'set src)) set-src*)]))
               data)]
-            [global
+            #;[global
              (vector-for-each
               (lambda (info)
                 (match info
@@ -259,7 +220,7 @@ order by count(*) desc
                    (for-each (lambda (src) (add-ref name 'global 'ref src)) ref-src*)
                    (for-each (lambda (src) (add-ref name 'global 'set src)) set-src*)]))
               data)]
-            [prim
+            #;[prim
              (vector-for-each
               (lambda (info)
                 (match info
@@ -267,7 +228,7 @@ order by count(*) desc
                    (for-each (lambda (src) (add-ref name 'prim2 'ref src)) ref2-src*)
                    (for-each (lambda (src) (add-ref name 'prim3 'ref src)) ref3-src*)]))
               data)]
-            [syntax
+            #;[syntax
              (vector-for-each
               (lambda (info)
                 (match info
@@ -281,10 +242,15 @@ order by count(*) desc
                    (add-ref name 'syntax 'bind (protect bind-src))
                    (for-each (lambda (src) (add-ref name 'syntax 'ref (protect src))) ref-src*)]))
               data)]
-            [realm 'ok]
-            [contour 'ok]
-            [imports-ht 'ok]
-            [alias 'ok])))
+            #;[realm 'ok]
+            #;[contour 'ok]
+            #;[imports-ht 'ok]
+            #;[alias 'ok]
+            [,_
+             (printf "unhandled category: ~s\n" cat)
+             (throw `#(unhandled-category ,cat))
+             ])))
+         ])
 
       ;; Need to alo ensure we have the fp -> line/col table
       (execute "delete from line_fps where sfd_fk in (select sfd_pk from sfds)")

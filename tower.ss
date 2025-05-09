@@ -846,7 +846,7 @@ order by R.line
       (import (tower-client))
       (tower-client:start&link port-number)
       (trace-output-port (console-output-port))
-      (tower-client:import "/tmp/source-map.fasl")
+      (tower-client:import "/tmp/bolus.fasl")
       (transaction 'log-db (void))
       )
 
