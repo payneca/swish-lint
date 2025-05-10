@@ -1,147 +1,116 @@
 #!chezscheme
 (library (sourcerer)
   (export
+   sourcerer:import
    sourcerer:walk-refs
    )
   (import
    (chezscheme)
    (swish imports)
    )
-  ;; TODO decide out how to provide access to compatible record types for client's use
-  (define-record-type lexical-info
-    (nongenerative #{lexical-info ble5klpzns025alnatm0ydav9-0})
-    (fields
-     (immutable name)
-     (immutable bind-src)
-     (mutable ref-src*)
-     (mutable set-src*)))
+  (include "hack-record-types.ss")
 
-  ;; TODO do we care about meta-level for globals?
-  (define-record-type global-info
-    (nongenerative #{global-info ble5klpzns025alnatm0ydav9-1})
-    (fields
-     (immutable name)
-     (mutable ref-src*)
-     (mutable set-src*)))
+  (define-tuple <sm>
+    st-dump
+    prim*
+    node*
+    rubbish
+    )
 
-  ;; TODO better names? don't want to confuse with make-priminfo elsewhere
-  (define-record-type prim-info
-    (nongenerative #{prim-info a9h3n8t2pis427wy51x6e77bg-0})
-    (fields
-     (immutable name)
-     (mutable ref2-src*)
-     (mutable ref3-src*)))
+  (define-syntax foreach
+    (syntax-rules ()
+      [(_ ([var collection*] ...) e0 e1 ...)
+       (let ([f (lambda (var ...) e0 e1 ...)]
+             [var collection*] ...)
+         (cond
+          [(and (vector? var) ...) (vector-for-each f var ...)]
+          [else (for-each f var ...)]))]))
 
-  (define-record-type syntax-info
-    (nongenerative #{syntax-info ble5klpzns025alnatm0ydav9-3})
-    (fields
-     (immutable name)
-     (immutable bind-src)
-     (immutable meta-level)
-     (mutable ref-src*)))
+  (define (find/run ht key proc)
+    (let ([v (hashtable-ref ht key #!bwp)])
+      (cond
+       [(not (eq? v #!bwp)) v]
+       [else
+        (let ([v (proc)])
+          (hashtable-set! ht key v)
+          v)])))
 
-  (define-record-type contour
-    (nongenerative #{contour ble5klpzns025alnatm0ydav9-4})
-    (fields
-     (immutable src)
-     (immutable type)
-     (immutable meta-level)
-     (immutable bound*)))
+  (define (load-source-map filename)
+    (and (file-exists? filename)
+         (let ([ip (open-binary-file-to-read filename)])
+           (on-exit (close-port ip)
+             (fasl-read ip)))))
 
-  (define-record-type realm
-    (nongenerative #{realm ble5klpzns025alnatm0ydav9-5})
-    (fields
-     (immutable src)
-     (immutable name)
-     (immutable path)
-     (immutable version)
-     (immutable meta-level)
-     (immutable export*)
-     (immutable import*)))
-
-  (define (sourcerer:walk-refs filename table proc)
+  (define (sourcerer:import filename)
     (define ->uid (make-eq-hashtable))
     (define next-int 0)
     (define (get-next-int)
       (set! next-int (+ next-int 1))
       next-int)
-    (define (get-uid info name)
-      (cond
-       [(eq-hashtable-ref ->uid info #f)]
-       [else
-        (let ([uid (format "~a~a" name (get-next-int))])
-          (eq-hashtable-set! ->uid info uid)
-          uid)]))
-    (define (guarded type name uid src)
+    (define (get-uid key name)
+      (find/run ->uid key
+        (lambda () (format "~a:~a" name (get-next-int)))))
+    (define visited-sfd (make-hashtable string-hash string=?))
+    (define visited-srcs (make-hashtable string-hash string=?))
+    (define (sfd-key fn cs) (format "~a:~a" fn cs))
+    (define (src-key fn cs bfp efp) (format "~a:~a:~a:~a" fn cs bfp efp))
+    (define (add-ref name uid ref-type type src)
       (when src
         (let* ([sfd (source-object-sfd src)]
-               [path (and sfd (source-file-descriptor-path sfd))])
-          (when (and path (string=? filename path)) ; HACK still a hack, but less trouble
-            (proc table name uid type src)))))
+               [fn (coerce (source-file-descriptor-path sfd))]
+               [cs (coerce (source-file-descriptor-checksum sfd))]
+               [bfp (coerce (source-object-bfp src))]
+               [efp (coerce (source-object-efp src))])
+          (find/run visited-sfd (sfd-key fn cs)
+            (lambda ()
+              (db:log 'log-db "INSERT OR IGNORE INTO sfds (filename, checksum) VALUES (?, ?)" fn cs)
+              #t))
+          (find/run visited-srcs (src-key fn cs bfp efp)
+            (lambda ()
+              (db:log 'log-db
+                (ct:join #\space
+                  "INSERT OR IGNORE INTO sources (sfd_fk, bfp, efp)"
+                  "VALUES ("
+                  "(SELECT sfd_pk FROM sfds WHERE filename = ?1 AND checksum = ?2),"
+                  "?3, ?4"
+                  ")")
+                fn cs bfp efp)
+              #t))
+          (db:log 'log-db
+            (ct:join #\space
+              "INSERT INTO ref_src (source_fk, name, uid, ref_type, type)"
+              "VALUES ("
+              "  ("
+              "    SELECT source_pk FROM sources"
+              "    WHERE sfd_fk = (SELECT sfd_pk FROM sfds WHERE filename = ?1 AND checksum = ?2)"
+              "      AND bfp = ?3 AND efp = ?4"
+              "  ),"
+              "  ?5,"
+              "  ?6,"
+              "  ?7,"
+              "  ?8"
+              ")")
+            fn cs bfp efp (coerce name) (coerce uid) (coerce ref-type) (coerce type)))))
+    (match (load-source-map filename)
+      [#f #f]
+      [#!eof #f]
+      [`(<sm> ,st-dump ,prim* ,node* ,rubbish)
+       (foreach ([node node*])
+         (match node
+           [`(identifier-info ,name ,kind ,def ,set* ,ref*)
+            (define uid (get-uid node name))
+            (add-ref name uid kind 'bind def)
+            (foreach ([src set*]) (add-ref name uid kind 'set src))
+            (foreach ([src ref*]) (add-ref name uid kind 'ref src))]
+           [,_ (void)]))
+       (foreach ([prim prim*])
+         (match prim
+           [(,name [safe ,safe-src*] [unsafe ,unsafe-src*])
+            (define uid (get-uid prim name))
+            (foreach ([src safe-src*]) (add-ref name uid 'safe-prim 'ref src))
+            (foreach ([src unsafe-src*]) (add-ref name uid 'unsafe-prim 'ref src))]))
+       #t]))
 
-    (when (file-exists? "/tmp/source-map.fasl")
-      (let ([ip (open-binary-file-to-read "/tmp/source-map.fasl")])
-        (on-exit (close-port ip)
-          (let lp ()
-            (let* ([cat (fasl-read ip)]
-                   [data (fasl-read ip)])
-              (match cat
-                [#!eof (void)]
-                [lexical
-                 (vector-for-each
-                  (lambda (info)
-                    (match info
-                      [`(lexical-info ,name ,bind-src ,ref-src* ,set-src*)
-                       (define uid (get-uid info name))
-                       (define (ref! src) (guarded 'lexical name uid src))
-                       (guarded 'bind name uid bind-src)
-                       (for-each ref! ref-src*)
-                       (for-each ref! set-src*)]))
-                  data)
-                 (lp)]
-                [global
-                 (vector-for-each
-                  (lambda (info)
-                    (match info
-                      [`(global-info ,name ,ref-src* ,set-src*)
-                       ;; global-info's name is a gensym. We can use
-                       ;; that for our unique id, but need to get a
-                       ;; pretty name for the rest of the system.
-                       (define uid (format "~s" name))
-                       (let ([name (parameterize ([print-gensym #f]) (format "~s" name))])
-                         (define (ref! src) (guarded 'global name uid src))
-                         (for-each ref! ref-src*)
-                         (for-each ref! set-src*))]))
-                  data)
-                 (lp)]
-                [prim
-                 (vector-for-each
-                  (lambda (info)
-                    (match info
-                      [`(prim-info ,name ,ref2-src* ,ref3-src*)
-                       (define uid (get-uid info name))
-                       (define (ref! src) (guarded 'prim name uid src))
-                       (for-each ref! ref2-src*)
-                       (for-each ref! ref3-src*)]))
-                  data)
-                 (lp)]
-                [syntax
-                 (vector-for-each
-                  (lambda (info)
-                    (match info
-                      [`(syntax-info ,name ,bind-src ,ref-src*)
-                       (define uid (get-uid info name))
-                       (define (protect src)
-                         (cond
-                          ;; Built in syntax are marked. For now,
-                          ;; pretend like we just don't have source.
-                          [(eq? src 'built-in) #f]
-                          [else src]))
-                       (define (ref! src)
-                         (guarded 'syntax name uid (protect src)))
-                       (guarded 'bind name uid (protect bind-src))
-                       (for-each ref! ref-src*)]))
-                  data)
-                 (lp)]
-                [,_ (lp)])))))))
+  (define (sourcerer:walk-refs filename table proc)
+    #f)
   )

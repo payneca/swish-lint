@@ -29,6 +29,7 @@
    tower-client:get-definitions
    tower-client:get-local-references
    tower-client:get-references
+   tower-client:import
    tower-client:log
    tower-client:reset-directory
    tower-client:shutdown-server
@@ -245,7 +246,15 @@
         [line line]
         [char char])])))
 
-  (define (tower-client:get-local-references filename line char)
+  (define (tower-client:import filename)
+    (tower-client:call
+     (json:make-object
+      [method "import"]
+      [params
+       (json:make-object
+        [filename filename])])))
+
+  (define (tower-client:get-local-references filename line char fp)
     (tower-client:call
      (json:make-object
       [method "get-local-references"]
@@ -253,7 +262,8 @@
        (json:make-object
         [filename filename]
         [line line]
-        [char char])])))
+        [char char]
+        [fp fp])])))
 
   (define (tower-client:log msg)
     (tower-client:cast

@@ -32,6 +32,7 @@
    (json)
    (keywords)
    (software-info)
+   (sourcerer)
    (swish imports)
    )
 
@@ -116,8 +117,11 @@ where D.uid=?1
 order by substr(F.filename,-3)='.ss' desc, F.filename asc, D.line asc"
        uid root-fk)))
 
-  (define ($refs-in-file line char filename)
-    (execute "
+  (define ($refs-in-file filename line char fp)
+    ;; TODO For now, run original query... if there is data, use
+    ;; it. Otherwise, fall back to sourcerer query.
+    (match
+     (execute "
 select D.line,D.char,D.len from refs D
 inner join files F on F.file_pk=D.file_fk
 where D.uid in
@@ -129,7 +133,24 @@ where D.uid in
      and F.filename=?3)
   and F.filename=?3
 order by D.line asc"
-      line char filename))
+       line char filename)
+     [()
+      (guard fp)                        ; bypass if the fp is invalid
+      (execute "
+select NULL, S.bfp, S.efp - S.bfp
+from ref_src R, sources S, sfds SFD,
+ (select distinct uid
+  from ref_src R, sources S, sfds SFD
+  where sfd_pk=S.sfd_fk
+  and S.source_pk=R.source_fk
+  and SFD.filename = ?1
+  and ?2 >= S.bfp and ?2 < S.efp) A
+where sfd_pk=S.sfd_fk
+  and S.source_pk=R.source_fk
+  and SFD.filename = ?1
+  and R.uid=A.uid"
+        filename fp)]
+     [,rows rows]))
 
   (define ($refs-in-workspace line char filename root-fk)
     (execute "
@@ -283,6 +304,7 @@ order by rank desc, count desc, candidates.name asc"
        (let* ([filename (json:get msg '(params filename))]
               [line (json:get msg '(params line))]
               [char (json:get msg '(params char))]
+              [fp (json:get msg `(params fp))]
               [start (erlang:now)]
               [refs
                (map
@@ -294,7 +316,7 @@ order by rank desc, count desc, candidates.name asc"
                       [char char]
                       [len len])]))
                 (transaction 'log-db
-                  ($refs-in-file line char filename)))]
+                  ($refs-in-file filename line char fp)))]
               [end (erlang:now)]
               [log (json:make-object
                     [_op_ "get-local-references"]
@@ -420,6 +442,19 @@ order by rank desc, count desc, candidates.name asc"
                 [filename filename]
                 [definitions (scalar (execute "select count(*) from refs where type='defn'"))]
                 [references (scalar (execute "select count(*) from refs"))]
+                [time (- (erlang:now) start)]))))
+         (rpc:respond ws msg "ok"))]
+      [import
+       (let ([filename (json:get msg '(params filename))]
+             [start (erlang:now)])
+         (assert (path-absolute? filename))
+         (sourcerer:import filename)
+         (unless (< (verbosity) 1)
+           (transaction 'log-db
+             (do-log 1
+               (json:make-object
+                [_op_ "import"]
+                [filename filename]
                 [time (- (erlang:now) start)]))))
          (rpc:respond ws msg "ok"))]
       [shutdown
@@ -558,7 +593,38 @@ order by rank desc, count desc, candidates.name asc"
       (create-index 'refs_root "refs(root_fk)")
       (create-index 'refs_file "refs(file_fk)")
       (create-index 'refs_pre1 "refs(pre1)")
-      (create-index 'refs_type "refs(type)"))
+      (create-index 'refs_type "refs(type)")
+
+      ;; Sourcerer
+      (create-table ref_src
+        [ref_pk integer primary key]
+        [source_fk integer]
+        [name text]
+        [uid text]  ; TODO consider using an integer for speed instead
+        [ref_type text]
+        [type text])
+      (execute
+       (ct:join #\space
+         "create table if not exists [sfds] ("
+         "[sfd_pk] integer primary key,"
+         "[filename] text,"
+         "[checksum] integer,"
+         "unique([filename],[checksum])"
+         "on conflict ignore)"))
+      (execute
+       (ct:join #\space
+         "create table if not exists [sources] ("
+         "[source_pk] integer primary key autoincrement,"
+         "[sfd_fk] integer,"
+         "[bfp] integer,"
+         "[efp] integer,"
+         "unique([sfd_fk],[bfp],[efp])"
+         "on conflict ignore)"))
+
+      (create-index 'ref_src_name "ref_src(name)")
+      (create-index 'ref_src_type "ref_src(type)")
+      (create-index 'ref_src_sfk "ref_src(source_fk)")
+      )
     (define (upgrade-db)
       (match (log-db:version schema-name)
         [,@schema-version 'ok]

@@ -430,20 +430,30 @@
        (tower-client:get-references (uri->abs-path uri) line char))))
 
   (define (highlight-references doc uri line char)
-    (let ([line (+ line 1)]             ; LSP is 0-based
+    (let ([lookup-table (doc:get-lookup-table doc)]
+          [line (+ line 1)]             ; LSP is 0-based
           [char (+ char 1)])
+      (define (get-line/char ref)
+        (let ([line (json:ref ref 'line #f)]
+              [char (json:ref ref 'char #f)])
+          (if line
+              (values line char)
+              (let-values ([(line char) (fp->line/char lookup-table char)])
+                (values line char)))))
       (map
        (lambda (ref)
-         (let ([line (- (json:ref ref 'line #f) 1)] ; LSP is 0-based
-               [char (- (json:ref ref 'char #f) 1)]
-               [len (json:ref ref 'len #f)])
-           (json:make-object
-            [kind 1]                    ; Text
-            [range
-             (make-range
-              (make-pos line char)
-              (make-pos line (+ char len)))])))
-       (tower-client:get-local-references (uri->abs-path uri) line char))))
+         (let-values ([(line char) (get-line/char ref)])
+           (let ([line (- line 1)] ; LSP is 0-based
+                 [char (- char 1)]
+                 [len (json:ref ref 'len #f)])
+             (json:make-object
+              [kind 1]                  ; Text
+              [range
+               (make-range
+                (make-pos line char)
+                (make-pos line (+ char len)))]))))
+       (tower-client:get-local-references (uri->abs-path uri) line char
+         (line/char->fp lookup-table line char)))))
 
   (define (indent-range doc range options)
     (let* ([start (or (and range (json:ref range '(start line) #f)) 0)]
@@ -818,6 +828,14 @@
           [($state root-dir) =>
            (lambda (dir)
              (config:load-project dir)
+             (spawn
+              (lambda ()
+                (trace-time 'import
+                  (match (try (tower-client:import "/tmp/bolus.fasl"))
+                    [`(catch ,reason ,err)
+                     (trace-expr `(import ,(exit-reason->english reason)))
+                     (raise err)]
+                    [,result result]))))
              (let ([progress (make-progress "enumerate-directories"
                                "Analyze files"
                                (lambda (done total)

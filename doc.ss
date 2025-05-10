@@ -22,6 +22,7 @@
 
 (library (doc)
   (export
+   doc:get-lookup-table
    doc:get-text
    doc:get-value-near
    doc:start
@@ -36,11 +37,12 @@
    (trace)
    )
 
-  (define-state-tuple <document> cursor worker-pid on-changed)
+  (define-state-tuple <document> cursor lookup-table worker-pid on-changed)
 
   (define (init on-changed)
     `#(ok ,(<document> make
              [cursor #f]
+             [lookup-table #f]
              [worker-pid #f]
              [on-changed on-changed])))
 
@@ -50,6 +52,16 @@
     (match msg
       [get-text
        `#(reply ,(cursor->string ($state cursor)) ,state)]
+      [get-lookup-table
+       (cond
+        [($state lookup-table) =>
+         (lambda (lookup-table)
+           `#(reply ,lookup-table ,state))]
+        [else
+         (let ([lookup-table
+                (trace-time 'get-lookup-table
+                  (make-code-lookup-table (cursor->string ($state cursor))))])
+           `#(reply ,lookup-table ,($state copy [lookup-table lookup-table])))])]
       [#(get-value-near ,line1 ,char1)
        (trace-time `(get-value-near ,line1 ,char1)
          (let* ([cursor (cursor:goto-line! ($state cursor) (fx- line1 1))]
@@ -93,9 +105,10 @@
                `#(no-reply
                   ,($state copy
                      [cursor cursor]
+                     [lookup-table #f]
                      [worker-pid pid]))))]
           [else
-           `#(no-reply ($state copy [cursor cursor]))]))]))
+           `#(no-reply ($state copy [cursor cursor] [lookup-table #f]))]))]))
 
   (define (handle-info msg state)
     (match msg
@@ -113,6 +126,9 @@
 
   (define (doc:start on-changed)
     (gen-server:start #f on-changed))
+
+  (define (doc:get-lookup-table who)
+    (gen-server:call who 'get-lookup-table))
 
   (define (doc:get-text who)
     (gen-server:call who 'get-text))
