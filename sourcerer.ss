@@ -49,7 +49,7 @@
       next-int)
     (define (get-uid key name)
       (find/run ->uid key
-        (lambda () (format "~a:~a" name (get-next-int)))))
+        (lambda () (get-next-int))))
     (define visited-sfd (make-hashtable string-hash string=?))
     (define visited-srcs (make-hashtable string-hash string=?))
     (define (sfd-key fn cs) (format "~a:~a" fn cs))

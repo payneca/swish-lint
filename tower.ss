@@ -84,27 +84,53 @@
   (define (maybe-rows rows)
     (and (not (null? rows)) rows))
 
-  (define ($get-unique-id line char filename)
-    (scalar
-     (execute "
+  (define ($get-unique-id filename line char fp)
+    ;; TODO For now, run original query... if there is data, use
+    ;; it. Otherwise, fall back to sourcerer query.
+    (or (scalar
+         (execute "
 select D.uid
 from refs D
 inner join files F on F.file_pk=D.file_fk
 where D.line=?1
   and ?2 between D.char and D.char + D.len
   and F.filename=?3"
-       line char filename)))
+           line char filename))
+        (scalar
+         (execute "
+select distinct uid
+from ref_src R, sources S, sfds SFD
+where sfd_pk=S.sfd_fk
+  and S.source_pk=R.source_fk
+  and SFD.filename = ?1
+  and ?2 >= S.bfp and ?2 < S.efp"
+           filename fp))))
 
   (define ($defns-in-file uid filename)
+    ;; TODO For now, run original query... if there is data, use
+    ;; it. Otherwise, fall back to sourcerer query.
     (maybe-rows
-     (execute "
+     (match
+      (execute "
 select F.filename,D.line,D.char,D.len from refs D
 inner join files F on F.file_pk=D.file_fk
 where D.uid=?1
   and F.filename=?2
   and D.type='defn'
 order by D.line asc"
-       uid filename)))
+        uid filename)
+      [()
+       (execute "
+select SFD.filename, NULL, S.bfp, S.efp - S.bfp
+from sources S, sfds SFD
+where SFD.filename=?2
+  and S.source_pk in
+(select distinct source_fk
+ from ref_src
+ where uid=?1
+   and [type]='bind')"
+         uid filename)]
+      [,rows rows])))
 
   (define ($defns-in-workspace uid root-fk)
     (maybe-rows
@@ -272,6 +298,7 @@ order by rank desc, count desc, candidates.name asc"
        (let* ([filename (json:get msg '(params filename))]
               [line (json:get msg '(params line))]
               [char (json:get msg '(params char))]
+              [fp (json:get msg `(params fp))]
               [root-fk (root-key)]
               [start (erlang:now)]
               [defns
@@ -285,7 +312,7 @@ order by rank desc, count desc, candidates.name asc"
                       [char char]
                       [len len])]))
                 (transaction 'log-db
-                  (let ([uid ($get-unique-id line char filename)])
+                  (let ([uid ($get-unique-id filename line char fp)])
                     (or ($defns-in-file uid filename)
                         ($defns-in-workspace uid root-fk)
                         ($defns-anywhere uid filename)
@@ -600,7 +627,7 @@ order by rank desc, count desc, candidates.name asc"
         [ref_pk integer primary key]
         [source_fk integer]
         [name text]
-        [uid text]  ; TODO consider using an integer for speed instead
+        [uid integer]
         [ref_type text]
         [type text])
       (execute
@@ -622,6 +649,7 @@ order by rank desc, count desc, candidates.name asc"
          "on conflict ignore)"))
 
       (create-index 'ref_src_name "ref_src(name)")
+      (create-index 'ref_src_uid "ref_src(uid)")
       (create-index 'ref_src_type "ref_src(type)")
       (create-index 'ref_src_sfk "ref_src(source_fk)")
       )

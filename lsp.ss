@@ -399,20 +399,31 @@
           (tower-client:get-completions (uri->abs-path uri) line char prefix))]
        [else '()])))
 
+  (define (get-line/char lookup-table ref)
+    (let ([line (json:ref ref 'line #f)]
+          [char (json:ref ref 'char #f)])
+      (if line
+          (values line char)
+          (let-values ([(line char) (fp->line/char lookup-table char)])
+            (values line char)))))
+
   (define (get-definitions doc uri line char)
-    (let ([line (+ line 1)]             ; LSP is 0-based
+    (let ([lookup-table (doc:get-lookup-table doc)]
+          [line (+ line 1)]             ; LSP is 0-based
           [char (+ char 1)])
       (map
        (lambda (defn)
-         (let ([uri (abs-path->uri (json:ref defn 'filename #f))]
-               [line (- (json:ref defn 'line #f) 1)] ; LSP is 0-based
-               [char (- (json:ref defn 'char #f) 1)]
-               [len (json:ref defn 'len #f)])
-           (make-location uri
-             (make-range
-              (make-pos line char)
-              (make-pos line (+ char len))))))
-       (tower-client:get-definitions (uri->abs-path uri) line char))))
+         (let-values ([(line char) (get-line/char lookup-table defn)])
+           (let ([uri (abs-path->uri (json:ref defn 'filename #f))]
+                 [line (- line 1)]      ; LSP is 0-based
+                 [char (- char 1)]
+                 [len (json:ref defn 'len #f)])
+             (make-location uri
+               (make-range
+                (make-pos line char)
+                (make-pos line (+ char len)))))))
+       (tower-client:get-definitions (uri->abs-path uri) line char
+         (line/char->fp lookup-table line char)))))
 
   (define (get-references doc uri line char)
     (let ([line (+ line 1)]             ; LSP is 0-based
@@ -433,17 +444,10 @@
     (let ([lookup-table (doc:get-lookup-table doc)]
           [line (+ line 1)]             ; LSP is 0-based
           [char (+ char 1)])
-      (define (get-line/char ref)
-        (let ([line (json:ref ref 'line #f)]
-              [char (json:ref ref 'char #f)])
-          (if line
-              (values line char)
-              (let-values ([(line char) (fp->line/char lookup-table char)])
-                (values line char)))))
       (map
        (lambda (ref)
-         (let-values ([(line char) (get-line/char ref)])
-           (let ([line (- line 1)] ; LSP is 0-based
+         (let-values ([(line char) (get-line/char lookup-table ref)])
+           (let ([line (- line 1)]      ; LSP is 0-based
                  [char (- char 1)]
                  [len (json:ref ref 'len #f)])
              (json:make-object

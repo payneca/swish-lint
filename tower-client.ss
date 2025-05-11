@@ -226,7 +226,7 @@
         [char char]
         [prefix prefix])])))
 
-  (define (tower-client:get-definitions filename line char)
+  (define (tower-client:get-definitions filename line char fp)
     (tower-client:call
      (json:make-object
       [method "get-definitions"]
@@ -234,7 +234,8 @@
        (json:make-object
         [filename filename]
         [line line]
-        [char char])])))
+        [char char]
+        [fp fp])])))
 
   (define (tower-client:get-references filename line char)
     (tower-client:call
