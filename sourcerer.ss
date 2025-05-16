@@ -41,7 +41,7 @@
            (on-exit (close-port ip)
              (fasl-read ip)))))
 
-  (define (sourcerer:import filename)
+  (define (sourcerer:import filename base-dir)
     (define ->uid (make-eq-hashtable))
     (define next-int 0)
     (define (get-next-int)
@@ -57,7 +57,11 @@
     (define (add-ref name uid ref-type type src)
       (when src
         (let* ([sfd (source-object-sfd src)]
-               [fn (coerce (source-file-descriptor-path sfd))]
+               [fn (source-file-descriptor-path sfd)]
+               [fn (if (path-absolute? fn)
+                       fn
+                       (path-combine base-dir fn))]
+               [fn (coerce fn)]
                [cs (coerce (source-file-descriptor-checksum sfd))]
                [bfp (coerce (source-object-bfp src))]
                [efp (coerce (source-object-efp src))])

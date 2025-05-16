@@ -475,7 +475,7 @@ order by rank desc, count desc, candidates.name asc"
        (let ([filename (json:get msg '(params filename))]
              [start (erlang:now)])
          (assert (path-absolute? filename))
-         (sourcerer:import filename)
+         (sourcerer:import filename (root-dir))
          (unless (< (verbosity) 1)
            (transaction 'log-db
              (do-log 1
