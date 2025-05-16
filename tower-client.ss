@@ -31,6 +31,7 @@
    tower-client:get-references
    tower-client:import
    tower-client:log
+   tower-client:query
    tower-client:reset-directory
    tower-client:shutdown-server
    tower-client:start&link
@@ -274,6 +275,15 @@
        (json:make-object
         [timestamp (erlang:now)]
         [message msg])])))
+
+  (define (tower-client:query query . args)
+    (tower-client:call
+     (json:make-object
+      [method "query"]
+      [params
+       (json:make-object
+        [query query]
+        [args args])])))
 
   (define (tower-client:reset-directory dir)
     (tower-client:call

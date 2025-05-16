@@ -484,6 +484,20 @@ order by rank desc, count desc, candidates.name asc"
                 [filename filename]
                 [time (- (erlang:now) start)]))))
          (rpc:respond ws msg "ok"))]
+      [query                            ; HACK
+       (let ([query (json:get msg '(params query))]
+             [args (json:get msg '(params args))])
+         (cond
+          [(pregexp-match-positions (re "^\\s*(?:select|with|explain)") query)
+           (match (try
+                   (transaction 'log-db
+                     (apply execute query args)))
+             [`(catch ,reason)
+              (rpc:respond ws msg (exit-reason->english reason))]
+             [,rows
+              (rpc:respond ws msg (map vector->list rows))])]
+          [else
+           (rpc:respond ws msg "Query must start with select, with, or explain")]))]
       [shutdown
        (do-log 1 (json:make-object [_op_ "shutdown"]))
        (rpc:respond ws msg "ok")
