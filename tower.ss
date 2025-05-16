@@ -648,6 +648,23 @@ order by rank desc, count desc, candidates.name asc"
          "unique([sfd_fk],[bfp],[efp])"
          "on conflict ignore)"))
 
+      (execute "drop view if exists vrefs")
+      (execute
+       (ct:join #\space
+         "create view vrefs as"
+         "select ref_pk as ref_fk"
+         "  ,source_fk"
+         "  ,sfd_fk"
+         "  ,name"
+         "  ,uid"
+         "  ,ref_type"
+         "  ,type"
+         "  ,bfp"
+         "  ,efp"
+         "  ,filename"
+         "from ref_src R, sources S, sfds SFD"
+         "where source_pk=source_fk and sfd_pk=sfd_fk"))
+
       (create-index 'ref_src_name "ref_src(name)")
       (create-index 'ref_src_uid "ref_src(uid)")
       (create-index 'ref_src_type "ref_src(type)")
