@@ -350,6 +350,7 @@ order by rank desc, count desc, candidates.name asc"
                     [filename filename]
                     [line line]
                     [char char]
+                    [fp fp]
                     [found (length refs)]
                     [time (- end start)])])
          (do-log 1 log)
