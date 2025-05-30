@@ -826,7 +826,7 @@
                (delete-req id pid state))]
             [else state]))]
         ["initialized"
-         ;; Always load the user configuration event if root-dir is
+         ;; Always load the user configuration even if root-dir is
          ;; not specified.
          (output-env)
          (config:load-user)
