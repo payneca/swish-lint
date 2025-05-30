@@ -26,6 +26,7 @@
    semtok:classify-full
    semtok:classify-no-modifiers
    semtok:encode
+   semtok:encode-file
    semtok:list->modifiers
    semtok:modifiers
    semtok:modifiers->flags
@@ -39,6 +40,8 @@
    (indent)
    (read)
    (swish imports)
+   (tower-client)
+   (trace)
    )
   (define-enumeration token-type-element
     (
@@ -291,4 +294,49 @@
   (define (semtok:encode text start-line end-line semtok-mode)
     (encode-tokens
      (text->semtoks text start-line end-line semtok-mode)))
+
+  (define (semtok:encode-file filename lookup-table start-line end-line semtok-mode)
+    (encode-tokens
+     (map
+      (lambda (row)
+        (match row
+          [(,ref-type ,type ,bfp ,efp)
+           (let-values ([(line1 char) (fp->line/char lookup-table bfp)] ; TODO much like above
+                        [(line2 _char) (fp->line/char lookup-table efp)])
+             (let ([len (- efp bfp)]
+                   [type (semtok:type->index
+                          'function
+                          #;(match ref-type
+                            ["safe-prim" 'keyword]
+                            ["unsafe-prim" 'keyword]
+                            ["syntax" 'macro]
+                            ["global" 'function]
+                            [,_ 'variable]))]
+                   [modifiers (semtok:modifiers->flags
+                               (match ref-type
+                                 ["safe-prim" (semtok:modifiers optimize2)]
+                                 ["unsafe-prim" (semtok:modifiers optimize3)]
+                                 [,_ (guard (equal? type "set")) (semtok:modifiers side-effect)]
+                                 [,_ (semtok:modifiers)]))])
+               (<semtok> make
+                 [line (- line1 1)]     ; LSP is 0-based
+                 [char (- char 1)]      ; LSP is 0-based
+                 [length len]
+                 [type type]
+                 [modifiers modifiers])))]))
+      (let ([start-fp 0 #;(line/char->fp lookup-table start-line 0)]
+            [end-fp (most-positive-fixnum) #;(line/char->fp lookup-table end-line 0)])
+        (trace-time 'query
+          (tower-client:query
+           (ct:join #\space
+             "select ref_type,type,bfp,efp"
+             "from vrefs"
+             "where filename=?1"
+             "  and bfp >= ?2"
+             "  and efp < ?3"
+             "  and name = 'tmp'"
+             ;;"  and name <> 'tmp'"
+             ;;"  and ref_type like '%prim%'"
+             "order by bfp, efp")
+           filename start-fp end-fp))))))
   )
