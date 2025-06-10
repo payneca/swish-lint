@@ -105,6 +105,10 @@
       [#f #f]
       [#!eof #f]
       [`(<sm> ,st-dump ,prim* ,node* ,rubbish)
+       ;; TODO this is too heavy handed, but effective at demonstration
+       (db:log 'log-db "delete from ref_src")
+       (db:log 'log-db "delete from sources")
+       (db:log 'log-db "delete from sfds")
        (foreach ([node node*])
          (match node
            [`(identifier-info ,name ,kind ,def ,set* ,ref*)
