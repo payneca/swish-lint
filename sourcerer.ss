@@ -11,6 +11,7 @@
    (chezscheme)
    (os-process)
    (swish imports)
+   (tower-client)
    (trace)
    )
   (include "hack-record-types.ss")
@@ -155,7 +156,12 @@
          (trace-expr
           `((file-saved ,fn)
             (root-dir ,($state root-dir))))
-         `#(no-reply ,state 1000)]
+         (cond
+          [($state os-pid) =>
+           (lambda (os-pid)
+             (kill os-pid 'restart)
+             `#(no-reply ,state))]
+          [else `#(no-reply ,state 1000)])]
         [#(root-dir ,dir)
          `#(no-reply ,($state copy [root-dir dir]) 1000)]))
     (define (handle-info msg state)
@@ -182,6 +188,7 @@
                 (trace-expr `(sourcerer ,(exit-reason->english reason)))
                 `#(no-reply ,state)]
                [#(ok ,pid)
+                (unlink pid) ; TODO not sure this is a good idea, but necessary for the restart case
                 `#(no-reply ,($state copy [os-pid pid] [os-monitor (monitor pid)]))])]
             [else
              `#(no-reply ,state)]))]
@@ -189,7 +196,23 @@
          (cond
           [(eq? m ($state os-monitor))
            (trace-expr `(sourcerer:exited ,(exit-reason->english reason)))
-           `#(no-reply ,($state copy [os-pid #f] [os-monitor #f]))]
+           (match reason
+             [normal
+              ;; TODO this is weak.
+              (when (file-exists? "/tmp/bolus.fasl")
+                (spawn
+                 (lambda ()
+                   (trace-time 'import
+                     (match (try (tower-client:import "/tmp/bolus.fasl"))
+                       [`(catch ,reason ,err)
+                        (trace-expr `(import ,(exit-reason->english reason)))
+                        (raise err)]
+                       [,result result])))))
+              `#(no-reply ,($state copy [os-pid #f] [os-monitor #f]))]
+             [restart
+              `#(no-reply ,($state copy [os-pid #f] [os-monitor #f]) 0)]
+             [,_
+              `#(no-reply ,($state copy [os-pid #f] [os-monitor #f]))])]
           [else
            `#(no-reply ,state)])]))
     (gen-server:start&link 'sourcerer))
