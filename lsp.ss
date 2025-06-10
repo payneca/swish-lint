@@ -695,6 +695,7 @@
                 [root-dir (and root-uri (uri->abs-path root-uri))]
                 [client-cap (json:get params 'capabilities)])
            (tower-client:reset-directory root-dir)
+           (sourcerer:root-dir root-dir)
            `#(ok
               ,(json:make-object
                 [capabilities
@@ -873,12 +874,10 @@
           #f
           state)]
         ["textDocument/didSave"
-         (updated
-          (json:get params '(textDocument uri))
-          (json:get params 'text)
-          #t
-          #f
-          state)]
+         (let* ([uri (json:get params '(textDocument uri))]
+                [state (updated uri (json:get params 'text) #t #f state)])
+           (sourcerer:file-saved (uri->abs-path uri))
+           state)]
         ["textDocument/didClose" state]
         ["workspace/didChangeConfiguration"
          (let* ([semtok-mode (json:ref params '(settings swish semtok-mode) #f)]
@@ -931,6 +930,7 @@
                   'ignore
                   error)]))
         temporary 1000 worker)
+      #(sourcerer ,sourcerer:start&link permanent 1000 worker)
       #(lsp-server ,lsp-server:start&link permanent 1000 worker)
       #(lsp:writer
         ,(lambda () (lsp:start-writer op))

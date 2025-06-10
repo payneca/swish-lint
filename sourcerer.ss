@@ -1,12 +1,17 @@
 #!chezscheme
 (library (sourcerer)
   (export
+   sourcerer:file-saved
    sourcerer:import
+   sourcerer:root-dir
+   sourcerer:start&link
    sourcerer:walk-refs
    )
   (import
    (chezscheme)
+   (os-process)
    (swish imports)
+   (trace)
    )
   (include "hack-record-types.ss")
 
@@ -117,4 +122,81 @@
 
   (define (sourcerer:walk-refs filename table proc)
     #f)
+
+  (define (sourcerer:start&link)
+    (define-state-tuple <sourcerer> root-dir os-pid os-monitor)
+    (define (process-input ip pid)  ; TODO what should this really do?
+      (let ([line (get-line ip)])
+        (unless (eof-object? line)
+          (display line (trace-output-port))
+          (newline (trace-output-port))
+          (process-input ip pid))))
+    (define (process-stderr ip pid)
+      (let ([line (get-line ip)])
+        (unless (eof-object? line)
+          (display line (trace-output-port))
+          (newline (trace-output-port))
+          (process-stderr ip pid))))
+    (define (init)
+      `#(ok
+         ,(<sourcerer> make
+            [root-dir #f]
+            [os-pid #f]
+            [os-monitor #f]
+            )))
+    (define (terminate reason state)
+      (cond
+       [($state os-pid) =>
+        (lambda (os-pid) (os-process:stop os-pid 0))]))
+    (define (handle-call msg from state) (match msg))
+    (define (handle-cast msg state)
+      (match msg
+        [#(file-saved ,fn)
+         (trace-expr
+          `((file-saved ,fn)
+            (root-dir ,($state root-dir))))
+         `#(no-reply ,state 1000)]
+        [#(root-dir ,dir)
+         `#(no-reply ,($state copy [root-dir dir]) 1000)]))
+    (define (handle-info msg state)
+      (match msg
+        [timeout
+         (trace-expr 'sourcerer:timeout)
+         (assert ($state root-dir))     ; TODO remove
+         (assert (not ($state os-pid))) ; TODO remove
+         (let ([prep.ss (path-combine ($state root-dir) ".swish" "prep.ss")])
+           (cond
+            [(file-exists? prep.ss)
+             (trace-expr `(sourcerer:found ,prep.ss))
+             (match (os-process:start&link "prep"
+                      ;; TODO don't trust that prep runs from the
+                      ;; right directory. Should update it to take an
+                      ;; optional root directory to cd to before
+                      ;; evaling.
+                      (list (format "(load \"~a\")" prep.ss))
+                      'utf8
+                      process-input
+                      #f
+                      process-stderr)
+               [#(error ,reason)
+                (trace-expr `(sourcerer ,(exit-reason->english reason)))
+                `#(no-reply ,state)]
+               [#(ok ,pid)
+                `#(no-reply ,($state copy [os-pid pid] [os-monitor (monitor pid)]))])]
+            [else
+             `#(no-reply ,state)]))]
+        [`(DOWN ,m ,_ ,reason)
+         (cond
+          [(eq? m ($state os-monitor))
+           (trace-expr `(sourcerer:exited ,(exit-reason->english reason)))
+           `#(no-reply ,($state copy [os-pid #f] [os-monitor #f]))]
+          [else
+           `#(no-reply ,state)])]))
+    (gen-server:start&link 'sourcerer))
+
+  (define (sourcerer:root-dir dir)
+    (gen-server:cast 'sourcerer `#(root-dir ,dir)))
+
+  (define (sourcerer:file-saved fn)
+    (gen-server:cast 'sourcerer `#(file-saved ,fn)))
   )
