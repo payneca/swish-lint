@@ -33,6 +33,7 @@
    reason->line/msg
    walk-annotations
    walk-defns
+   walk-defns+
    walk-defns-re
    walk-refs
    walk-refs-re
@@ -177,7 +178,7 @@
          (lp end)]
         [,_ (void)])))
 
-  (define (walk-defns annotated-code proc)
+  (define (walk-defns* annotated-code proc include-outer?)
     (define defines (join (cons "define" (map pregexp-quote (config:definition-keywords))) #\|))
     (define defun-match-regexp
       (re (format "^(?:trace-)?(?:~a)(?:-[\\S]+)?" defines)))
@@ -193,15 +194,23 @@
                    [,_
                     (eq-hashtable-set! local-keywords keyword #t)
                     #t])))))
-    (define (guarded name name.anno)
+    (define (guarded name name.anno outer.anno)
       (cond
        [(not (symbol? name)) (void)]
        [(not (annotation? name.anno)) (void)]
-       [else
+       [(not include-outer?)
         (let ([src (annotation-source name.anno)])
           (proc name
             (source-object-bfp src)
-            (source-object-efp src)))]))
+            (source-object-efp src)))]
+       [else
+        (let ([src (annotation-source name.anno)]
+              [outer (annotation-source outer.anno)])
+          (proc name
+            (source-object-bfp src)
+            (source-object-efp src)
+            (source-object-bfp outer)
+            (source-object-efp outer)))]))
     (walk-annotations annotated-code
       (lambda (x)
         (match x
@@ -209,22 +218,28 @@
               [expression
                (,_ `(annotation [expression (,name.anno . ,_)]) . ,_)])
            (guard (keyword? keyword defun-match-regexp))
-           (guarded name name.anno)]
+           (guarded name name.anno x)]
           [`(annotation [stripped (,keyword ,name . ,_)]
               [expression (,_ ,name.anno . ,_)])
            (guard (keyword? keyword def-match-regexp))
-           (guarded name name.anno)]
+           (guarded name name.anno x)]
           [`(annotation [stripped (,meta ,keyword (,name . ,_) . ,_)]
               [expression
                (,_ ,_ `(annotation [expression (,name.anno . ,_)]) . ,_)])
            (guard (and (symbol? meta) (keyword? keyword defun-match-regexp)))
-           (guarded name name.anno)]
+           (guarded name name.anno x)]
           [`(annotation [stripped (,meta ,keyword ,name . ,_)]
               [expression (,_ ,_ ,name.anno . ,_)])
            ;; Use defun here because set! is not valid with meta.
            (guard (and (symbol? meta) (keyword? keyword defun-match-regexp)))
-           (guarded name name.anno)]
+           (guarded name name.anno x)]
           [,_ (void)]))))
+
+  (define (walk-defns annotated-code proc)
+    (walk-defns* annotated-code proc #f))
+
+  (define (walk-defns+ annotated-code proc)
+    (walk-defns* annotated-code proc #t))
 
   (define ref-regexp (re identifier))
 

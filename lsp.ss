@@ -440,6 +440,69 @@
          '()]
         [,data (json:make-object [data data])])))
 
+  (define (get-symbols doc uri)
+    (define-tuple <range> bfp efp)
+    (define-tuple <doc-symbol>
+      name
+      range
+      outer-range
+      children
+      )
+    (define (range:inside? inner outer)
+      (<range> open inner inner. [bfp efp])
+      (<range> open outer outer. [bfp efp])
+      (and (>= inner.bfp outer.bfp)
+           (<= inner.efp outer.efp)))
+    (define (symbol:inside? inner outer)
+      (range:inside?
+       (<doc-symbol> range inner)
+       (<doc-symbol> outer-range outer)))
+    (define (rebuild-symbols ls)
+      ;; pre: ls is ordered inner-most to outer-most.
+      (let lp ([ls ls] [roots '()])
+        (match ls
+          [() roots]
+          [(,s . ,rest)
+           (let-values ([(children siblings) (partition (lambda (x) (symbol:inside? x s)) roots)])
+             (lp rest
+               (cons
+                (<doc-symbol> copy s
+                  [children children])
+                siblings)))])))
+    (trace-time 'get-symbols
+      (match
+       (try
+        (let* ([text (doc:get-text doc)]
+               [source-table (make-code-lookup-table text)]
+               [annotated-code (read-code text)]
+               [symbols '()])
+          (define (range->lsp-range r)
+            (<range> open r [bfp efp])
+            (bfp/efp->lsp-range source-table bfp efp))
+          (define (doc-symbol->lsp s)
+            (<doc-symbol> open s [name range outer-range children])
+            (json:make-object
+             [name name]
+             [kind 13]
+             [range (range->lsp-range outer-range)]
+             [selectionRange (range->lsp-range range)]
+             [children (map doc-symbol->lsp children)]))
+          (walk-defns+ annotated-code
+            (lambda (name bfp efp outer.bfp outer.efp)
+              (set! symbols
+                (cons
+                 (<doc-symbol> make
+                   [name (substring text bfp efp)]
+                   [range (<range> make [bfp bfp] [efp efp])]
+                   [outer-range (<range> make [bfp outer.bfp] [efp outer.efp])]
+                   [children '()])
+                 symbols))))
+          (map doc-symbol->lsp (rebuild-symbols symbols))))
+       [`(catch ,reason)
+        (trace-expr `(get-symbols => ,(exit-reason->english reason)))
+        '()]
+       [,result result])))
+
   (define (keep-file? fn)
     (let ([ext (path-extension fn)])
       (or (member ext '("ss" "ms"))
@@ -643,6 +706,7 @@
                   [documentHighlightProvider #t]
                   [documentFormattingProvider #t]
                   [documentRangeFormattingProvider #t]
+                  [documentSymbolProvider #t]
                   )])
               ,($state copy
                  [root-uri root-uri]
@@ -719,6 +783,13 @@
             [(ht:ref ($state uri->doc) uri #f) =>
              (lambda (doc)
                `#(spawn ,(lambda () (get-semantic-tokens doc uri #f semtok-mode)) ,state))]
+            [else `#(ok () ,state)]))]
+        ["textDocument/documentSymbol"
+         (let ([uri (json:get params '(textDocument uri))])
+           (cond
+            [(ht:ref ($state uri->doc) uri #f) =>
+             (lambda (doc)
+               `#(spawn ,(lambda () (get-symbols doc uri)) ,state))]
             [else `#(ok () ,state)]))]
         ["shutdown"
          (set! shutdown-requested? #t)
