@@ -11,6 +11,7 @@ Protocol](https://microsoft.github.io/language-server-protocol/).
 Features include:
 
 - Code completion
+- Document symbols (outline and breadcrumbs)
 - Goto definition
 - Find references
 - [Indentation](indentation.md)
