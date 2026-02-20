@@ -23,6 +23,7 @@
 #!chezscheme
 (library (semtok)
   (export
+   <semtok>
    semtok:classify-full
    semtok:classify-no-modifiers
    semtok:encode
@@ -30,6 +31,7 @@
    semtok:modifiers
    semtok:modifiers->flags
    semtok:modifiers-list
+   semtok:text->semtoks
    semtok:type->index
    semtok:types-list
    )
@@ -230,7 +232,7 @@
                           [char delta-start])])
               (cons*token new (lp rest t)))])])))
 
-  (define (text->semtoks text start-line end-line semtok-mode)
+  (define (semtok:text->semtoks text start-line end-line semtok-mode)
     (define classify
       (match semtok-mode
         [no-modifiers semtok:classify-no-modifiers]
@@ -290,5 +292,5 @@
 
   (define (semtok:encode text start-line end-line semtok-mode)
     (encode-tokens
-     (text->semtoks text start-line end-line semtok-mode)))
+     (semtok:text->semtoks text start-line end-line semtok-mode)))
   )

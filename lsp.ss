@@ -442,6 +442,39 @@
          '()]
         [,data (json:make-object [data data])])))
 
+  (define doc-symbol-types
+    (map semtok:type->index '(function macro type variable)))
+
+  (define (get-symbols doc uri)
+    (trace-time 'get-symbols
+      (match
+       (try
+        (let* ([text (doc:get-text doc)]
+               [source-table (make-code-lookup-table text)])
+          (fold-right
+           (lambda (t acc)
+             (<semtok> open t [line char length type])
+             (if (memq type doc-symbol-types)
+                 (cons
+                  (let ([fp (line/char->fp source-table (+ line 1) (+ char 1))]
+                        [range (make-range
+                                (make-pos line char)
+                                (make-pos line (+ char length)))])
+                    (json:make-object
+                     [name (substring text fp (+ fp length))]
+                     [kind 13]
+                     [range range]
+                     [selectionRange range]
+                     [children '()]))
+                  acc)
+                 acc))
+           '()
+           (semtok:text->semtoks text 0 (most-positive-fixnum) 'no-modifiers))))
+       [`(catch ,reason)
+        (trace-expr `(get-symbols => ,(exit-reason->english reason)))
+        '()]
+       [,result result])))
+
   (define (keep-file? fn)
     (let ([ext (path-extension fn)])
       (or (member ext '("ss" "ms"))
@@ -645,6 +678,7 @@
                   [documentHighlightProvider #t]
                   [documentFormattingProvider #t]
                   [documentRangeFormattingProvider #t]
+                  [documentSymbolProvider #t]
                   )])
               ,($state copy
                  [root-uri root-uri]
@@ -721,6 +755,13 @@
             [(ht:ref ($state uri->doc) uri #f) =>
              (lambda (doc)
                `#(spawn ,(lambda () (get-semantic-tokens doc uri #f semtok-mode)) ,state))]
+            [else `#(ok () ,state)]))]
+        ["textDocument/documentSymbol"
+         (let ([uri (json:get params '(textDocument uri))])
+           (cond
+            [(ht:ref ($state uri->doc) uri #f) =>
+             (lambda (doc)
+               `#(spawn ,(lambda () (get-symbols doc uri)) ,state))]
             [else `#(ok () ,state)]))]
         ["shutdown"
          (set! shutdown-requested? #t)
