@@ -23,6 +23,7 @@
 #!chezscheme
 (library (json)
   (export
+   json-null
    json:get
    json:merge
    json:write-flat
@@ -31,6 +32,10 @@
    (chezscheme)
    (swish imports)
    )
+  ;; Swish changed representation of null; This should allow
+  ;; Swish-Lint to be agnostic for now.
+  (define json-null
+    (let-syntax ([const (lambda (x) #`(quote #,(datum->syntax x (json:string->object "null"))))]) const))
 
   (define json:get
     (case-lambda

@@ -104,7 +104,7 @@
         [rootUri
          (cond
           [(and path (format "file://~a" path))]
-          [else #\nul])]
+          [else json-null])]
         [capabilities (json:make-object)])]))
    (rpc-client:notify rpc
      (json:make-object

@@ -686,7 +686,7 @@
             [else `#(ok () ,state)]))]
         ["shutdown"
          (set! shutdown-requested? #t)
-         `#(ok #\nul ,state)]
+         `#(ok ,json-null ,state)]
         [,_
          (fprintf (console-error-port) "*** Unhandled message ~s ***\n" method)
          (trace-msg (json:make-object [id id] [method method] [params params]))
