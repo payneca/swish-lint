@@ -82,12 +82,12 @@
 (isolate-mat encode ()
   (match-let*
    ([(0 1 6 2 0 0 7 3 8 0 0 4 2 4 0)
-     (semtok:encode "(define foo 12)" 0 (most-positive-fixnum) 'full)]
+     (semtok:encode "(define foo 12)" 0 (fx- (most-positive-fixnum) 1) 'full)]
     [(0 0 10 6 0 1 0 10 6 0 1 0 7 6 0)
-     (semtok:encode "\"this is a\nmulti-line\nstring\"" 0 (most-positive-fixnum) 'full)]
+     (semtok:encode "\"this is a\nmulti-line\nstring\"" 0 (fx- (most-positive-fixnum) 1) 'full)]
     ;; Check no-modifiers works as intended
     [(0 1 4 1 8 0 9 2 4 0)
-     (semtok:encode "(set! foo 12)" 0 (most-positive-fixnum) 'full)]
+     (semtok:encode "(set! foo 12)" 0 (fx- (most-positive-fixnum) 1) 'full)]
     [(0 10 2 4 0)
-     (semtok:encode "(set! foo 12)" 0 (most-positive-fixnum) 'no-modifiers)])
+     (semtok:encode "(set! foo 12)" 0 (fx- (most-positive-fixnum) 1) 'no-modifiers)])
    'ok))

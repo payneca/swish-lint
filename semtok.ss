@@ -230,12 +230,12 @@
                           [char delta-start])])
               (cons*token new (lp rest t)))])])))
 
-  (define (text->semtoks text start-line end-line semtok-mode)
+  (define (text->semtoks text start-line0 end-line0 semtok-mode)
     (define classify
       (match semtok-mode
         [no-modifiers semtok:classify-no-modifiers]
         [full semtok:classify-full]))
-    (let ([tokens (tokenize text start-line end-line)]
+    (let ([tokens (tokenize text (+ start-line0 1) (+ end-line0 1))] ; LSP is 0-based
           [table (make-code-lookup-table text)])
       (let outer ([tokens tokens] [state #f] [acc '()])
         (match tokens
@@ -288,7 +288,7 @@
                                 acc))]))]))))]
               [else (outer rest state acc)]))]))))
 
-  (define (semtok:encode text start-line end-line semtok-mode)
+  (define (semtok:encode text start-line0 end-line0 semtok-mode)
     (encode-tokens
-     (text->semtoks text start-line end-line semtok-mode)))
+     (text->semtoks text start-line0 end-line0 semtok-mode)))
   )

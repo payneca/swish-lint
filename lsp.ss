@@ -433,7 +433,7 @@
     (trace-time 'semantic-tokens
       (match (try
               (let ([start (or (and range (json:ref range '(start line) #f)) 0)]
-                    [end (or (and range (json:ref range '(end line) #f)) (most-positive-fixnum))])
+                    [end (or (and range (json:ref range '(end line) #f)) (fx- (most-positive-fixnum) 1))])
                 (semtok:encode (doc:get-text doc) start end semtok-mode)))
         [`(catch ,reason)
          (trace-expr `(semantic-tokens => ,(exit-reason->english reason)))
