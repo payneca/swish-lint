@@ -1721,6 +1721,8 @@
        (code
         "(let ()"
         "body)")
+       1
+       (most-positive-fixnum)
        '()
        (lambda (line old new acc)
          (cons (list line old new) acc))))]
@@ -1736,6 +1738,23 @@
         "\""
         "some text"
         "\")")
+       1
+       (most-positive-fixnum)
+       '()
+       (lambda (line old new acc)
+         (cons (list line old new) acc))))]
+    ;; A range that begins inside a multi-line string reports the
+    ;; lines of the range, aligned with the source.
+    [((2 "   def\")" "   def\")")
+      (3 "(foo)" "(foo)"))
+     (reverse
+      (fold-indent
+       (code
+        "(define x \"abc"
+        "   def\")"
+        "(foo)")
+       2
+       3
        '()
        (lambda (line old new acc)
          (cons (list line old new) acc))))])
