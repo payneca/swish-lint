@@ -22,6 +22,7 @@
 
 (import
  (indent)
+ (read)
  (software-info)
  (testing common)
  )
@@ -112,6 +113,98 @@
        (throw `(indentation-failed
                 (expected ,expected)
                 (actual ,actual))))]))
+
+(indent-mat tokenization ()
+  (define (make-case code full-specs)
+    (define (filter-specs specs start end)
+      (filter
+       (lambda (spec)
+         (<= start (car spec) end))
+       specs))
+    (define (flatten tokens)
+      (map
+       (lambda (t)
+         (list
+          (fp->line lookup-table (token-bfp t))
+          (token-type t)
+          (token-raw t)))
+       tokens))
+    (define lookup-table (make-code-lookup-table code))
+    (lambda (start end)
+      (let ([expected (filter-specs full-specs start end)]
+            [actual (flatten (tokenize code start end))])
+        (unless (equal? expected actual)
+          (newline)
+          (printf "    case: ~a ~a\n" start end)
+          (printf "expected: ~s\n" expected)
+          (printf "  actual: ~s\n" actual)
+          (newline)
+          (throw `(tokenize-failed
+                   (expected ,expected)
+                   (actual ,actual)))))))
+  ;; Basic input cases
+  (match-let*
+   ([,simple (code "this is some code\n")]
+    [`(catch #(bad-arg open-token-string not-a-string)) (try (tokenize 'not-a-string 0 0))]
+    [`(catch #(bad-arg open-token-string 0)) (try (tokenize simple 0 0))]
+    [`(catch #(bad-arg open-token-string 0)) (try (tokenize simple 1 0))]
+    [`(catch #(bad-arg open-token-string 9)) (try (tokenize simple 10 9))])
+   'ok)
+
+  ;; Scripts that start with #! are special
+  (let ([do-test
+         (make-case
+          (code
+           "#!/usr/bin/env swish"
+           ""
+           "(define line3 3)")
+          `((1 text "#!/usr/bin/env")
+            (1 ws " ")
+            (1 text "swish")
+            (1 eol "\n")
+            (2 eol "\n")
+            (3 lparen "(")
+            (3 atomic "define")
+            (3 ws " ")
+            (3 atomic "line3")
+            (3 ws " ")
+            (3 atomic "3")
+            (3 rparen ")")))])
+    (do-test 1 (most-positive-fixnum))
+    (do-test 1 1)
+    (do-test 2 2)
+    (do-test 3 3)
+    (do-test 4 4)
+    (do-test 1 2)
+    (do-test 1 3)
+    (do-test 2 3))
+
+  ;; Starting with #!chezscheme does not go through the #! pre-pass
+  (let ([do-test
+         (make-case
+          (code
+           "#!chezscheme"
+           ""
+           "(define line3 3)")
+          `((1 text "#!chezscheme")
+            (1 eol "\n")
+            (2 eol "\n")
+            (3 lparen "(")
+            (3 atomic "define")
+            (3 ws " ")
+            (3 atomic "line3")
+            (3 ws " ")
+            (3 atomic "3")
+            (3 rparen ")")))])
+    (do-test 1 (most-positive-fixnum))
+    (do-test 1 1)
+    (do-test 2 2)
+    (do-test 3 3)
+    (do-test 4 4)
+    (do-test 1 2)
+    (do-test 1 3)
+    (do-test 2 3))
+  )
 
 (indent-mat non-keywords ()
   (check-indent
