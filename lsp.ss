@@ -408,15 +408,13 @@
   (define (indent-range doc range options)
     (let* ([start (or (and range (json:ref range '(start line) #f)) 0)]
            [end (or (and range (json:ref range '(end line) #f))
-                    (most-positive-fixnum))]
-           [end-char (or (and range (json:ref range '(end character) #f))
-                         0)]
-           [end (if (zero? end-char)
+                    (fx- (most-positive-fixnum) 1))]
+           [end (if (not (and range (json:ref range '(end character) #f)))
                     (- end 1)
                     end)])
       (trace-time 'indent
         (reverse
-         (fold-indent (doc:get-text doc) '()
+         (fold-indent (doc:get-text doc) (+ start 1) (+ end 1) '()
            (lambda (line old new acc)
              (let ([line (- line 1)])   ; LSP is 0-based
                (if (and (<= start line end)
