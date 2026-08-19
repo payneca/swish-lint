@@ -148,7 +148,7 @@
        (lambda (filename)
          (let* ([text (utf8->string (read-file filename))]
                 [start (erlang:now)]
-                [indented (indent text)]
+                [indented (indent text 1 (most-positive-fixnum))]
                 [end (erlang:now)])
            (cond
             [(string=? text indented)
