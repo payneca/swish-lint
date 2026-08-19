@@ -134,7 +134,7 @@
   (define (open-token-string text start-line end-line)
     ;; tokens should be in the inclusive range [start-line, end-line],
     ;; meaning that a multi-line string that crosses a boundary should
-    ;; be included in the output.
+    ;; be included in the output. start-line and end-line are 1-based.
     (define line-number 1)
     (define (count-newlines bfp efp)
       ;; count using the original text to avoid allocation
@@ -143,7 +143,11 @@
           ((fx= i efp) c)))
     (define (yield+ t)
       (when t
-        (yield t)))
+        (yield t)
+        (when (eq? (token-type t) 'eol)
+          ;; for simple newlines, we want to count _after_ yielding
+          ;; the token
+          (set! line-number (fx+ line-number 1)))))
     (define (build-token* type value bfp efp err props)
       (and (<= start-line line-number end-line)
            (make-token type (token-type-indexer type) value value bfp efp err props)))
@@ -180,9 +184,6 @@
            [(eq? c #\newline)           ; newline
             (let ([next (fx+ start 1)])
               (yield+ (build-token 'eol #f start next err empty-props))
-              ;; for simple newlines, we want to count _after_
-              ;; yielding the token
-              (set! line-number (fx+ line-number 1))
               (gen-ext-tokens next end err))]
            [(eq? c #\;)                 ; line comments
             (let lp ([next (fx+ start 1)])
@@ -241,7 +242,8 @@
     (define (gen-tokens)
       (let ([ip (open-input-string text)]
             [end (string-length text)])
-        (when (and (fx> end 2)
+        (when (and (fx= start-line 1)
+                   (fx> end 2)
                    (eq? (string-ref text 0) #\#)
                    (eq? (string-ref text 1) #\!)
                    (let ([x (string-ref text 2)])
@@ -250,8 +252,12 @@
           ;; Advance the port, attempt to parse the entire line as
           ;; extended tokens and continue.
           (get-line ip)
-          (set! line-number (fx+ line-number 1))
           (gen-ext-tokens 0 (port-position ip) #f))
+        (let lp ()
+          (when (< line-number start-line)
+            (get-line ip)
+            (set! line-number (fx+ line-number 1))
+            (lp)))
         (let lp ([prior-efp (port-position ip)])
           (when (and (< prior-efp end)
                      (<= line-number end-line))
@@ -299,6 +305,10 @@
                      (gen-ext-tokens prior-efp efp err)
                      (lp efp))]))]
               [,efp (lp efp)])))))
+    (arg-check 'open-token-string
+      [text string?]
+      [start-line fixnum? (lambda (x) (fx> x 0))]
+      [end-line fixnum? (lambda (x) (fx>= x start-line))])
     (generator
      (gen-tokens)
      (yield (eof-object))))
@@ -845,7 +855,7 @@
 
   (define tokenize
     (case-lambda
-     [(text) (tokenize text 0 (most-positive-fixnum))]
+     [(text) (tokenize text 1 (most-positive-fixnum))]
      [(text start-line end-line)
       (let* ([tokens (parse text start-line end-line)]
              [tokens (mark (make-token-port tokens))])
