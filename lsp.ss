@@ -418,28 +418,30 @@
   (define (indent-range doc range options)
     (let* ([start (or (and range (json:ref range '(start line) #f)) 0)]
            [end (or (and range (json:ref range '(end line) #f))
-                    (most-positive-fixnum))]
-           [end-char (or (and range (json:ref range '(end character) #f))
-                         0)]
-           [end (if (zero? end-char)
+                    (fx- (most-positive-fixnum) 1))]
+           ;; The end position is exclusive, so a range that ends at
+           ;; character 0 does not include that line.
+           [end (if (eqv? (and range (json:ref range '(end character) #f)) 0)
                     (- end 1)
                     end)])
       (trace-time 'indent
-        (reverse
-         (fold-indent (doc:get-text doc) '()
-           (lambda (line old new acc)
-             (let ([line (- line 1)])   ; LSP is 0-based
-               (if (and (<= start line end)
-                        (not (string=? old new)))
-                   (cons
-                    (make-text-edit
-                     (make-range
-                      (make-pos line 0)
-                      (make-pos line (max (string-length old)
-                                          (string-length new))))
-                     new)
-                    acc)
-                   acc))))))))
+        (if (< end start)
+            '()
+            (reverse
+             (fold-indent (doc:get-text doc) (+ start 1) (+ end 1) '()
+               (lambda (line old new acc)
+                 (let ([line (- line 1)]) ; LSP is 0-based
+                   (if (and (<= start line end)
+                            (not (string=? old new)))
+                       (cons
+                        (make-text-edit
+                         (make-range
+                          (make-pos line 0)
+                          (make-pos line (max (string-length old)
+                                              (string-length new))))
+                         new)
+                        acc)
+                       acc)))))))))
 
   (define (keep-file? fn)
     (let ([ext (path-extension fn)])
