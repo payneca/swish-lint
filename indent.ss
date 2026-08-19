@@ -879,18 +879,43 @@
       (display-tokens ls op)
       (get-output-string op)))
 
-  (define (indent text)
-    (tokens->string (indent-tokens (tokenize text))))
+  (define indent
+    (case-lambda
+     [(text)
+      (indent text 1 (most-positive-fixnum))]
+     [(text start-line1 end-line1)
+      (tokens->string (indent-tokens (tokenize text start-line1 end-line1)))]))
 
-  (define (fold-indent text init proc)
-    (let ([src-port (open-input-string text)]
-          [dst-port (open-input-string (indent text))])
-      (let lp ([line 1] [acc init])
-        (if (eof-object? (peek-char src-port))
+  (define (fold-indent text start-line1 end-line1 init proc)
+    ;; [start-line1, end-line1] inclusive
+    (define (fp->line1 fp)
+      (do ([i 0 (fx+ i 1)]
+           [n 1 (if (eq? (string-ref text i) #\newline) (fx+ n 1) n)])
+          ((fx= i fp) n)))
+    (let* ([tokens (tokenize text start-line1 end-line1)]
+           ;; A token that crosses into the range, such as a
+           ;; multi-line string, is included, so the indented text may
+           ;; begin on an earlier line. Align the source with it, and
+           ;; report only lines in the range.
+           [first-line1
+            (match tokens
+              [() start-line1]
+              [(,t . ,_) (min start-line1 (fp->line1 (token-bfp t)))])]
+           [src-port (open-input-string text)]
+           [dst-port (open-input-string
+                      (tokens->string (indent-tokens tokens)))])
+      (do ([i 1 (+ i 1)]) ((= i first-line1))
+        (get-line src-port))
+      (let lp ([line first-line1] [acc init])
+        (if (or (eof-object? (peek-char src-port))
+                (> line end-line1))
             acc
             (let ([src-line (get-line src-port)]
                   [dst-line (get-line dst-port)])
-              (lp (+ line 1) (proc line src-line dst-line acc)))))))
+              (lp (+ line 1)
+                (if (< line start-line1)
+                    acc
+                    (proc line src-line dst-line acc))))))))
 
   (record-writer (csv7:record-type-descriptor (token-prop))
     (lambda (r p wr)

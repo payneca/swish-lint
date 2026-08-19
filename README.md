@@ -108,6 +108,12 @@ invoking `swish`, `scheme`, and `petite` stopping upon success. Swish
 is not required, and can be removed from your `PATH` to run in a "Chez
 Scheme-Only mode".
 
+When indenting an individual expression, Swish-Lint respects the
+existing indentation of the surrounding code. This makes it useful
+even in codebases, such as Chez Scheme, whose indentation conventions
+differ from Swish-Lint's. To apply Swish-Lint's indentation rules
+consistently throughout a file, indent the entire file.
+
 ## Diagnosing Problems
 
 ### Client-side
