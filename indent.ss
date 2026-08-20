@@ -877,8 +877,12 @@
       (display-tokens ls op)
       (get-output-string op)))
 
-  (define (indent text start-line1 end-line1)
-    (tokens->string (indent-tokens (tokenize text start-line1 end-line1))))
+  (define indent
+    (case-lambda
+     [(text)
+      (indent text 1 (most-positive-fixnum))]
+     [(text start-line1 end-line1)
+      (tokens->string (indent-tokens (tokenize text start-line1 end-line1)))]))
 
   (define (fold-indent text start-line1 end-line1 init proc)
     ;; [start-line1, end-line1] inclusive
