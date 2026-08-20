@@ -1684,6 +1684,8 @@
        (code
         "(let ()"
         "body)")
+       1
+       (most-positive-fixnum)
        '()
        (lambda (line old new acc)
          (cons (list line old new) acc))))]
@@ -1699,6 +1701,8 @@
         "\""
         "some text"
         "\")")
+       1
+       (most-positive-fixnum)
        '()
        (lambda (line old new acc)
          (cons (list line old new) acc))))])
