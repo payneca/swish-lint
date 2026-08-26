@@ -1,3 +1,5 @@
+;;; -*- lexical-binding: t; -*-
+;;;
 ;;; Copyright 2020 Beckman Coulter, Inc.
 ;;;
 ;;; Permission is hereby granted, free of charge, to any person
