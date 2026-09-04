@@ -314,7 +314,7 @@
         (match
          (try
           (walk code source-table
-            (lambda (table name source)
+            (lambda (table name source outer.source)
               (let ([bfp (get-bfp source)]
                     [efp (get-efp source)])
                 (let-values ([(line char) (fp->line/char table bfp)])
@@ -480,34 +480,70 @@
          '()]
         [,data (json:make-object [data data])])))
 
-  (define doc-symbol-types
-    (map semtok:type->index '(function macro type variable)))
-
   (define (get-symbols doc uri)
+    (define-tuple <range> bfp efp)
+    (define-tuple <doc-symbol>
+      name
+      range
+      outer-range
+      children
+      )
+    (define (source->range src)
+      (<range> make
+        [bfp (source-object-bfp src)]
+        [efp (source-object-efp src)]))
+    (define (range:inside? inner outer)
+      (<range> open inner inner. [bfp efp])
+      (<range> open outer outer. [bfp efp])
+      (and (>= inner.bfp outer.bfp)
+           (<= inner.efp outer.efp)))
+    (define (symbol:inside? inner outer)
+      (range:inside?
+       (<doc-symbol> range inner)
+       (<doc-symbol> outer-range outer)))
+    (define (rebuild-symbols ls)
+      ;; pre: ls is ordered inner-most to outer-most.
+      (let lp ([ls ls] [roots '()])
+        (match ls
+          [() roots]
+          [(,s . ,rest)
+           (let-values ([(children siblings) (partition (lambda (x) (symbol:inside? x s)) roots)])
+             (lp rest
+               (cons
+                (<doc-symbol> copy s
+                  [children children])
+                siblings)))])))
     (trace-time 'get-symbols
       (match
        (try
         (let* ([text (doc:get-text doc)]
-               [source-table (make-code-lookup-table text)])
-          (fold-right
-           (lambda (t acc)
-             (<semtok> open t [line char length type])
-             (if (memq type doc-symbol-types)
-                 (cons
-                  (let ([fp (line/char->fp source-table (+ line 1) (+ char 1))]
-                        [range (make-range
-                                (make-pos line char)
-                                (make-pos line (+ char length)))])
-                    (json:make-object
-                     [name (substring text fp (+ fp length))]
-                     [kind 13]
-                     [range range]
-                     [selectionRange range]
-                     [children '()]))
-                  acc)
-                 acc))
-           '()
-           (semtok:text->semtoks text 0 (fx- (most-positive-fixnum) 1) 'no-modifiers))))
+               [source-table (make-code-lookup-table text)]
+               [annotated-code (read-code text)]
+               [symbols '()])
+          (define (range->lsp-range r)
+            (<range> open r [bfp efp])
+            (bfp/efp->lsp-range source-table bfp efp))
+          (define (doc-symbol->lsp s)
+            (<doc-symbol> open s [name range outer-range children])
+            (json:make-object
+             [name name]
+             [kind 13]
+             [range (range->lsp-range outer-range)]
+             [selectionRange (range->lsp-range range)]
+             [children (map doc-symbol->lsp children)]))
+          (walk-defns annotated-code source-table
+            (lambda (table name source outer.source)
+              (let ([bfp (source-object-bfp source)]
+                    [efp (source-object-efp source)])
+                (set! symbols
+                  (cons
+                   (<doc-symbol> make
+                     [name (substring text bfp efp)]
+                     [range (source->range source)]
+                     [outer-range (source->range outer.source)]
+                     [children '()])
+                   symbols)))))
+          (map doc-symbol->lsp (rebuild-symbols symbols))))
        [`(catch ,reason)
         (trace-expr `(get-symbols => ,(exit-reason->english reason)))
         '()]

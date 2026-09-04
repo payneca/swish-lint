@@ -174,7 +174,7 @@
         [(,_ (,start . ,end))
          (let ([name (substring text start end)])
            (unless (string->number name)
-             (proc table name (cons start end))))
+             (proc table name (cons start end) #f)))
          (lp end)]
         [,_ (void)])))
 
@@ -194,11 +194,11 @@
                    [,_
                     (eq-hashtable-set! local-keywords keyword #t)
                     #t])))))
-    (define (guarded name name.anno)
+    (define (guarded name name.anno outer.anno)
       (cond
        [(not (symbol? name)) (void)]
        [(not (annotation? name.anno)) (void)]
-       [else (proc table name (annotation-source name.anno))]))
+       [else (proc table name (annotation-source name.anno) (annotation-source outer.anno))]))
     (walk-annotations annotated-code
       (lambda (x)
         (match x
@@ -206,21 +206,21 @@
               [expression
                (,_ `(annotation [expression (,name.anno . ,_)]) . ,_)])
            (guard (keyword? keyword defun-match-regexp))
-           (guarded name name.anno)]
+           (guarded name name.anno x)]
           [`(annotation [stripped (,keyword ,name . ,_)]
               [expression (,_ ,name.anno . ,_)])
            (guard (keyword? keyword def-match-regexp))
-           (guarded name name.anno)]
+           (guarded name name.anno x)]
           [`(annotation [stripped (,meta ,keyword (,name . ,_) . ,_)]
               [expression
                (,_ ,_ `(annotation [expression (,name.anno . ,_)]) . ,_)])
            (guard (and (symbol? meta) (keyword? keyword defun-match-regexp)))
-           (guarded name name.anno)]
+           (guarded name name.anno x)]
           [`(annotation [stripped (,meta ,keyword ,name . ,_)]
               [expression (,_ ,_ ,name.anno . ,_)])
            ;; Use defun here because set! is not valid with meta.
            (guard (and (symbol? meta) (keyword? keyword defun-match-regexp)))
-           (guarded name name.anno)]
+           (guarded name name.anno x)]
           [,_ (void)]))))
 
   (define ref-regexp (re identifier))
@@ -231,7 +231,7 @@
         [((,start . ,end))
          (let ([name (substring text start end)])
            (unless (string->number name)
-             (proc table name (cons start end))))
+             (proc table name (cons start end) #f)))
          (lp end)]
         [#f (void)])))
 
@@ -241,15 +241,15 @@
         (match x
           [`(annotation ,source [stripped ,name])
            (guard (symbol? name))
-           (proc table name source)]
+           (proc table name source #f)]
           [`(annotation ,source [stripped ($primitive . ,prim-info)])
            (match prim-info
              [(,name)
               (guard (symbol? name))
-              (proc table name source)]
+              (proc table name source #f)]
              [(,level ,name)
               (guard (symbol? name))
-              (proc table name source)]
+              (proc table name source #f)]
              [,_ (void)])]
           [,_ (void)]))))
 

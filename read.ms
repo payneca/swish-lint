@@ -30,7 +30,7 @@
   (define (extract-name str)
     (let ([result #f])
       (walk-defns-re str 'no-table
-        (lambda (table name source)
+        (lambda (table name source outer.source)
           (set! result name)))
       result))
 
