@@ -1,4 +1,4 @@
-;;; Copyright 2025 Chris Payne
+;;; Copyright 2025 The Swish Contributers
 ;;;
 ;;; Permission is hereby granted, free of charge, to any person
 ;;; obtaining a copy of this software and associated documentation
