@@ -25,6 +25,7 @@
  (config-params)
  (json)
  (lsp)
+ (read)
  (software-info)
  (testing common)
  (testing pipe)
@@ -299,6 +300,17 @@
         (json:make-object
          [line line0]
          [character char0])])])))
+
+(define (get-symbols uri)
+  (rpc-client:call 'rpc
+    (json:make-object
+     [jsonrpc "2.0"]
+     [method "textDocument/documentSymbol"]
+     [params
+      (json:make-object
+       [textDocument
+        (json:make-object
+         [uri uri])])])))
 
 (define (get-references uri line0 char0)
   (rpc-client:call 'rpc
@@ -731,6 +743,95 @@
 
         (did-close uri)
         'ok))))
+
+(isolate-mat symbols ()
+  (define-tuple <doc-symbol>
+    name
+    range
+    selection-range
+    children
+    )
+  (define (extract ls proc)
+    (match ls
+      [() '()]
+      [(,s . ,rest)
+       (cons (cons (proc s) (extract (<doc-symbol> children s) proc))
+         (extract rest proc))]))
+  (define (json->tuple obj)
+    (assert (= (json:get obj 'kind) 13)) ; all marked as "variable" for now
+    (<doc-symbol> make
+      [name (json:get obj 'name)]
+      [range (extract-range (json:get obj 'range))]
+      [selection-range (extract-range (json:get obj 'selectionRange))]
+      [children (map json->tuple (json:get obj 'children))]))
+  (define (extract-symbols ls)
+    (map json->tuple ls))
+  (define (range->bfp/efp table range)
+    (match range
+      [(from ,bl ,bc to ,el ,ec)
+       (values
+        (line/char->fp table (+ bl 1) (+ bc 1))
+        (line/char->fp table (+ el 1) (+ ec 1)))]))
+
+  (let ([rpc (start-lsp-server (get-real-path "."))])
+    (on-exit (stop-lsp-server rpc)
+      (define wait-for-test-sync (capture-test-sync))
+
+      (assert (null? (get-symbols "file:///tmp/does-not-exist.ss")))
+      (let* ([uri "file:///tmp/foo.ss"]
+             [text (utf8->string
+                    (read-file
+                     (path-combine (support-dir) "nested-definitions.ss")))]
+             [source-table (make-code-lookup-table text)])
+        (did-open uri text)
+        (wait-for-test-sync uri)
+
+        (match-let*
+         ([,syms (extract-symbols (get-symbols uri))]
+
+          ;; sibling symbols and children should be in the same order
+          ;; as the input file. library and module names not
+          ;; supported (yet).
+          [(("inside-library?")
+            ("cobra" ("tomax") ("xamot"))
+            ("inside-module?")
+            ("shrubbery" ("level1" ("level2")))
+            ("outside-library?"))
+           (extract syms (<doc-symbol> name))])
+
+         ;; verify the selection range is the size of the symbol
+         (extract syms
+           (lambda (s)
+             (<doc-symbol> open s [name selection-range])
+             (let-values ([(bfp efp) (range->bfp/efp source-table selection-range)])
+               (assert (= (- efp bfp) (string-length name))))))
+
+         ;; verify the range is same or larger than selection-range
+         (extract syms
+           (lambda (s)
+             (<doc-symbol> open s [range selection-range])
+             (let-values ([(rbfp refp) (range->bfp/efp source-table range)]
+                          [(sbfp sefp) (range->bfp/efp source-table selection-range)])
+               (assert (and (<= rbfp sbfp) (>= refp sefp))))))
+
+         ;; verify the parent ranges are larger than the child ranges
+         (let ()
+           (define (range:inside? inner outer)
+             (let-values ([(inner.bfp inner.efp) (range->bfp/efp source-table inner)]
+                          [(outer.bfp outer.efp) (range->bfp/efp source-table outer)])
+               (and (>= inner.bfp outer.bfp)
+                    (<= inner.efp outer.efp))))
+           (define (range-ok? s)
+             (<doc-symbol> open s s. [range children])
+             (andmap
+              (lambda (c)
+                (<doc-symbol> open c c. [range])
+                (and (range:inside? c.range s.range)
+                     (range-ok? c)))
+              s.children))
+           (assert (andmap range-ok? syms)))
+
+         'ok)))))
 
 (isolate-mat semver ()
   ;; from https://semver.org/#is-there-a-suggested-regular-expression-regex-to-check-a-semver-string
