@@ -23,6 +23,7 @@
 #!chezscheme
 (library (indent)
   (export
+   find-start-line1
    fold-indent
    has-prop?
    indent
@@ -916,6 +917,84 @@
                 (if (< line start-line1)
                     acc
                     (proc line src-line dst-line acc))))))))
+
+  ;; Returns the 1-based line where indenting can start and still
+  ;; produce the right indentation for line1, or #f when line1 starts
+  ;; inside a string, block comment, or |symbol|. Starting at the line
+  ;; of the innermost open paren that encloses line1 keeps that line's
+  ;; existing indentation, so line1 is indented relative to the code
+  ;; around it rather than to how the whole text would be indented.
+  ;; This makes one pass over the text before line1 tracking only what
+  ;; is needed to match parens.
+  (define (find-start-line1 text line1)
+    (define end (string-length text))
+    (define line 1)
+    (define (char-at i) (and (< i end) (string-ref text i)))
+    (define (newline!)
+      ;; returns #t when line1 starts inside a string or comment
+      (set! line (+ line 1))
+      (= line line1))
+    (define (skip-to-newline i)
+      (if (or (>= i end) (eqv? (string-ref text i) #\newline))
+          i
+          (skip-to-newline (+ i 1))))
+    (define (skip-delimited i delim)
+      ;; returns the index after the closing delim, or #f
+      (let ([c (char-at i)])
+        (cond
+         [(not c) #f]
+         [(eqv? c delim) (+ i 1)]
+         [(eqv? c #\\)
+          (if (and (eqv? (char-at (+ i 1)) #\newline) (newline!))
+              #f
+              (skip-delimited (+ i 2) delim))]
+         [(and (eqv? c #\newline) (newline!)) #f]
+         [else (skip-delimited (+ i 1) delim)])))
+    (define (skip-block-comment i depth)
+      ;; returns the index after the matching |#, or #f
+      (let ([c (char-at i)])
+        (cond
+         [(not c) #f]
+         [(and (eqv? c #\|) (eqv? (char-at (+ i 1)) #\#))
+          (if (= depth 1)
+              (+ i 2)
+              (skip-block-comment (+ i 2) (- depth 1)))]
+         [(and (eqv? c #\#) (eqv? (char-at (+ i 1)) #\|))
+          (skip-block-comment (+ i 2) (+ depth 1))]
+         [(and (eqv? c #\newline) (newline!)) #f]
+         [else (skip-block-comment (+ i 1) depth)])))
+    ;; The loop stops at the newline that starts line1, which never
+    ;; happens for the first line. It would scan the whole text and
+    ;; could return a later line.
+    (if (<= line1 1)
+        line1
+        (let lp ([i 0] [opens '()])
+          (define (result) (if (null? opens) line1 (car opens)))
+          (let ([c (char-at i)])
+            (case c
+              [(#f) (result)]
+              [(#\newline) (if (newline!) (result) (lp (+ i 1) opens))]
+              [(#\;) (lp (skip-to-newline i) opens)]
+              [(#\" #\|)
+               (let ([i (skip-delimited (+ i 1) c)])
+                 (and i (lp i opens)))]
+              [(#\#)
+               (case (char-at (+ i 1))
+                 [(#\\)
+                  ;; Skip the character so #\( is not a paren, but let
+                  ;; the loop see #\ followed by a newline.
+                  (if (eqv? (char-at (+ i 2)) #\newline)
+                      (lp (+ i 2) opens)
+                      (lp (+ i 3) opens))]
+                 [(#\|)
+                  (let ([i (skip-block-comment (+ i 2) 1)])
+                    (and i (lp i opens)))]
+                 ;; The datum after #; is still code.
+                 [(#\;) (lp (+ i 2) opens)]
+                 [else (lp (+ i 1) opens)])]
+              [(#\( #\[) (lp (+ i 1) (cons line opens))]
+              [(#\) #\]) (lp (+ i 1) (if (null? opens) opens (cdr opens)))]
+              [else (lp (+ i 1) opens)])))))
 
   (record-writer (csv7:record-type-descriptor (token-prop))
     (lambda (r p wr)

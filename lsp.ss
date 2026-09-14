@@ -463,6 +463,68 @@
                         acc)
                        acc)))))))))
 
+  (define (format-on-type doc ch line0 char0)
+    (trace-time 'format-on-type
+      ;; TODO can it be said that this indentation _only_ depends
+      ;; on the prior line? If so, we should give ourselves the
+      ;; ability to get a single line from the doc, then
+      ;; manufacture the fake text from here. (multiple newlines in
+      ;; a row seems to challenge this assumption; also the end of
+      ;; some expression that closes a paren throws this off.)
+
+      ;; TODO This feels like we should only add the fake character if
+      ;; the line is whitespace only, otherwise, we shouldn't do that
+      ;; extra work. But of course, we don't really know the contents
+      ;; of the last line. We would need to look ... maybe in reverse
+      ;; until first newline?
+
+      ;; TODO Investigate a newline at the end of one of these comments
+      ;; indents _a lot_. Weird.
+      (let* ([text (doc:get-text doc)]
+             [source-table (make-code-lookup-table text)]
+             [line1 (+ line0 1)]
+             [start-line1 (find-start-line1 text line1)])
+        (if (not start-line1)
+            ;; line1 is inside a string or comment, so leave it alone.
+            '()
+            (let* ([start-fp (line/char->fp source-table start-line1 1)]
+                   [text
+                    (cond
+                     [(< line1 (vector-length source-table))
+                      (let ([fp (line/char->fp source-table (+ line1 1) 1)])
+                        (string-truncate! text fp)
+                        ;; At this point text includes a newline. We'll
+                        ;; slam that newline to a fake character, then
+                        ;; append a newline.
+                        (string-set! text (- fp 1) #\a)
+                        (string-append text "\n"))]
+                     ;; The new line is the last line of the document,
+                     ;; so there is no following newline to replace.
+                     [else (string-append text "a\n")])])
+              ;; Indent only the text from start-line1 on. Prior lines
+              ;; are needed for context, but only the intended line
+              ;; should change.
+              (fold-indent (substring text start-fp (string-length text))
+                1 (+ (- line1 start-line1) 1) '()
+                (lambda (line old new acc)
+                  ;; LSP is 0-based
+                  (let ([line (+ line start-line1 -2)])
+                    (if (and (= line line0)
+                             (not (string=? old new)))
+                        ;; Subtract one from string lengths to eliminate
+                        ;; the fake character.
+                        (let ([olen (- (string-length old) 1)]
+                              [nlen (- (string-length new) 1)])
+                          (string-truncate! new nlen)
+                          (cons
+                           (make-text-edit
+                            (make-range
+                             (make-pos line 0)
+                             (make-pos line (max olen nlen)))
+                            new)
+                           acc))
+                        acc)))))))))
+
   (define (get-folding-ranges doc)
     (trace-time 'folding-ranges
       (let ([text (doc:get-text doc)])
@@ -767,6 +829,15 @@
                   [documentHighlightProvider #t]
                   [documentFormattingProvider #t]
                   [documentRangeFormattingProvider #t]
+                  [documentOnTypeFormattingProvider
+                   ;; VS Code notes:
+                   ;; Format On Type must be on.
+                   ;; Need a new version of vscode plugin.
+                   ;; Need to bind TAB to swish-lint-indent-line
+                   (json:make-object
+                    [firstTriggerCharacter "\n"]
+                    [moreTriggerCharacter (list "\t")] ; Tabs are complicated. :(
+                    )]
                   [documentSymbolProvider #t]
                   )])
               ,($state copy
@@ -858,6 +929,17 @@
             [(ht:ref ($state uri->doc) uri #f) =>
              (lambda (doc)
                `#(spawn ,(lambda () (get-symbols doc uri)) ,state))]
+            [else `#(ok () ,state)]))]
+        ["textDocument/onTypeFormatting"
+         (let ([uri (json:get params '(textDocument uri))]
+               [ch (json:get params 'ch)]
+               ;;[options (json:get params 'options)]
+               [line (json:get params '(position line))]
+               [char (json:get params '(position character))])
+           (cond
+            [(ht:ref ($state uri->doc) uri #f) =>
+             (lambda (doc)
+               `#(ok ,(format-on-type doc (string-ref ch 0) line char) ,state))]
             [else `#(ok () ,state)]))]
         ["shutdown"
          (set! shutdown-requested? #t)
