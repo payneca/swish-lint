@@ -1759,3 +1759,41 @@
        (lambda (line old new acc)
          (cons (list line old new) acc))))])
    'ok))
+
+(indent-mat find-start-line1 ()
+  (match-let*
+   (;; top level
+    [1 (find-start-line1 "" 1)]
+    [2 (find-start-line1 (code "(define x 1)" "") 2)]
+    [3 (find-start-line1 (code "(a)" "(b)" "") 3)]
+    ;; the first line, even when the text has an unclosed paren
+    [1 (find-start-line1 (code "x" "(define (f)") 1)]
+    ;; innermost unclosed open paren
+    [1 (find-start-line1 (code "(define (f)" "  (a)" "  (b)" "") 4)]
+    [2 (find-start-line1 (code "(define (f)" "  (let ([x 1])" "") 3)]
+    [2 (find-start-line1 (code "(define (f)" "  (g x" "     y" "") 4)]
+    [1 (find-start-line1 (code "(define (f)" "  (g x" "     y)" "") 4)]
+    [2 (find-start-line1 (code "(define (f)" "  (let ([a 1]" "") 3)]
+    ;; line1 past the end of the text
+    [1 (find-start-line1 (code "(define (f)" "  (a)") 5)]
+    ;; parens that are not code
+    [1 (find-start-line1 (code "(define (f)" "  (g #\\) #\\[ #\\()" "") 3)]
+    [1 (find-start-line1 (code "(define (f)" "  (g x) ; (" "") 3)]
+    [1 (find-start-line1 (code "(define (f)" "  (g \"(\" '|(|)" "") 3)]
+    [1 (find-start-line1 (code "(define (f)" "  (g \"\\\"(\")" "") 3)]
+    [1 (find-start-line1 (code "(define (f)" "  #| ( #| ( |# ( |#" "") 3)]
+    [1 (find-start-line1 (code "(define (f)" "  (g \"a (" "b\")" "") 4)]
+    ;; the datum after #; is code
+    [2 (find-start-line1 (code "(define (f)" "  #;(g" "") 3)]
+    [1 (find-start-line1 (code "(define (f)" "  #;(g x)" "") 3)]
+    ;; line1 starts inside a string, block comment, or |symbol|
+    [#f (find-start-line1 (code "(display \"hello" "" "world\")") 2)]
+    [#f (find-start-line1 (code "(display \"hello" "") 2)]
+    [#f (find-start-line1 (code "(g \"a \\" "b\")") 2)]
+    [#f (find-start-line1 (code "#|" "(foo" "|#") 2)]
+    [#f (find-start-line1 (code "#| #|" "|#" "(foo" "|#") 3)]
+    [#f (find-start-line1 (code "(g '|a" "b|)") 2)]
+    ;; but not after it closes
+    [1 (find-start-line1 (code "(display \"hello" "world\"" "") 3)]
+    [3 (find-start-line1 (code "#|" "|#" "(foo" "") 4)])
+   'ok))

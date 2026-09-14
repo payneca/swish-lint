@@ -443,6 +443,56 @@
                         acc)
                        acc)))))))))
 
+  (define (format-on-type doc ch line0 char0)
+    (trace-time 'format-on-type
+      (let* ([text (doc:get-text doc)]
+             [source-table (make-code-lookup-table text)]
+             [line1 (+ line0 1)])
+        (let-values ([(start-line1 paren-fp) (find-indent-start text line1)])
+          (if (not start-line1)
+              ;; line1 is inside a string or comment, so leave it alone.
+              '()
+              (let* ([line-fp (line/char->fp source-table start-line1 1)]
+                     ;; If start-line1 begins inside a string, comment,
+                     ;; or |symbol|, start at the enclosing paren, with
+                     ;; spaces in place of what precedes it on its line.
+                     [start-fp (or paren-fp line-fp)]
+                     ;; End of line1, before its newline. The new line
+                     ;; may be the last line of the document, so there
+                     ;; may be no following newline.
+                     [end-fp
+                      (if (< line1 (vector-length source-table))
+                          (- (line/char->fp source-table (+ line1 1) 1) 1)
+                          (string-length text))]
+                     ;; Indent only the text from start-line1 through
+                     ;; line1. Prior lines are needed for context, but
+                     ;; only the intended line should change. A fake
+                     ;; character keeps line1 from being blank.
+                     [text (string-append
+                            (make-string (- start-fp line-fp) #\space)
+                            (substring text start-fp end-fp)
+                            "a\n")])
+                (fold-indent text
+                  1 (+ (- line1 start-line1) 1) '()
+                  (lambda (line old new acc)
+                    ;; LSP is 0-based
+                    (let ([line (+ line start-line1 -2)])
+                      (if (and (= line line0)
+                               (not (string=? old new)))
+                          ;; Subtract one from string lengths to eliminate
+                          ;; the fake character.
+                          (let ([olen (- (string-length old) 1)]
+                                [nlen (- (string-length new) 1)])
+                            (string-truncate! new nlen)
+                            (cons
+                             (make-text-edit
+                              (make-range
+                               (make-pos line 0)
+                               (make-pos line (max olen nlen)))
+                              new)
+                             acc))
+                          acc))))))))))
+
   (define (get-semantic-tokens doc uri range semtok-mode)
     (trace-time 'semantic-tokens
       (match (try
@@ -724,6 +774,15 @@
                   [documentHighlightProvider #t]
                   [documentFormattingProvider #t]
                   [documentRangeFormattingProvider #t]
+                  [documentOnTypeFormattingProvider
+                   ;; VS Code notes:
+                   ;; Format On Type must be on.
+                   ;; Need a new version of vscode plugin.
+                   ;; Need to bind TAB to swish-lint-indent-line
+                   (json:make-object
+                    [firstTriggerCharacter "\n"]
+                    [moreTriggerCharacter (list "\t")] ; Tabs are complicated. :(
+                    )]
                   [documentSymbolProvider #t]
                   )])
               ,($state copy
@@ -808,6 +867,17 @@
             [(ht:ref ($state uri->doc) uri #f) =>
              (lambda (doc)
                `#(spawn ,(lambda () (get-symbols doc uri)) ,state))]
+            [else `#(ok () ,state)]))]
+        ["textDocument/onTypeFormatting"
+         (let ([uri (json:get params '(textDocument uri))]
+               [ch (json:get params 'ch)]
+               ;;[options (json:get params 'options)]
+               [line (json:get params '(position line))]
+               [char (json:get params '(position character))])
+           (cond
+            [(ht:ref ($state uri->doc) uri #f) =>
+             (lambda (doc)
+               `#(ok ,(format-on-type doc (string-ref ch 0) line char) ,state))]
             [else `#(ok () ,state)]))]
         ["shutdown"
          (set! shutdown-requested? #t)
