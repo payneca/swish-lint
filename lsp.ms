@@ -256,6 +256,23 @@
            [line end-line0]
            [character end-char0])])])])))
 
+(define (format-on-type uri ch line0 char0)
+  (rpc-client:call 'rpc
+    (json:make-object
+     [jsonrpc "2.0"]
+     [method "textDocument/onTypeFormatting"]
+     [params
+      (json:make-object
+       [textDocument
+        (json:make-object
+         [uri uri])]
+       [ch ch]
+       [options (json:make-object)]
+       [position
+        (json:make-object
+         [line line0]
+         [character char0])])])))
+
 (define (get-completions uri line0 char0)
   (rpc-client:call 'rpc
     (json:make-object
@@ -882,6 +899,160 @@
          'ok)
         (did-close uri)
         'ok))))
+
+(isolate-mat format-on-type ()
+  (define (extract-edits ls)
+    (map
+     (lambda (obj)
+       (list (json:get obj 'newText)
+         (extract-range (json:get obj 'range))))
+     ls))
+  (let ([rpc (start-lsp-server (get-real-path "."))])
+    (on-exit (stop-lsp-server rpc)
+      (define wait-for-test-sync (capture-test-sync))
+      (let ([uri "file:///tmp/foo.ss"])
+        ;; Each text is the document after the editor has inserted
+        ;; the typed character, and the position is just after it.
+        (define (type text ch line0 char0)
+          (did-change uri text)
+          (wait-for-test-sync uri)
+          (extract-edits (format-on-type uri ch line0 char0)))
+        (assert (null? (format-on-type "file:///tmp/does-not-exist.ss" "\n" 1 0)))
+        (did-open uri "")
+        (wait-for-test-sync uri)
+        (match-let*
+         (;; newline in the middle of the document
+          [(("  " (from 1 0 to 1 2)))
+           (type (code "(define (f)" "" "x)") "\n" 1 0)]
+          [(("  " (from 1 0 to 1 2)))
+           (type (code "(define (f)" "" "  1)" "(define (g) 2)") "\n" 1 0)]
+          ;; newline at the end of the document
+          [(("  " (from 1 0 to 1 2)))
+           (type (code "(define (f)" "") "\n" 1 0)]
+          ;; newline at the start of the document
+          [() (type (code "" "(define x 1)") "\n" 1 0)]
+          ;; newline after a complete top-level form
+          [() (type (code "(define x 1)" "") "\n" 1 0)]
+          [() (type (code "(define (f)" "  1)" "") "\n" 2 0)]
+          ;; newline after a complete nested form
+          [(("  " (from 2 0 to 2 2)))
+           (type (code "(define (f)" "  (g x)" "") "\n" 2 0)]
+          ;; newline within common forms
+          [(("      " (from 1 0 to 1 6)))
+           (type (code "(let ([x 1]" "") "\n" 1 0)]
+          [(("  " (from 1 0 to 1 2)))
+           (type (code "(let ([x 1])" "") "\n" 1 0)]
+          [(("    " (from 3 0 to 3 4)))
+           (type (code "(define (f x)" "  (cond" "   [(zero? x)" "") "\n" 3 0)]
+          [(("       " (from 1 0 to 1 7)))
+           (type (code "(map (lambda (x)" "") "\n" 1 0)]
+          [(("  " (from 1 0 to 1 2)))
+           (type (code "(foo a" "") "\n" 1 0)]
+          [((" " (from 1 0 to 1 1)))
+           (type (code "(foo" "") "\n" 1 0)]
+          [(("  " (from 1 0 to 1 2)))
+           (type (code "(list #\\(" "") "\n" 1 0)]
+          ;; newline that splits a line moves the remainder
+          [(("  (+ x 1))" (from 1 0 to 1 10)))
+           (type (code "(let ([x 1])" "(+ x 1))") "\n" 1 0)]
+          ;; editor already inserted the right indentation
+          [() (type (code "(define (f)" "  ") "\n" 1 2)]
+          ;; editor inserted too much indentation
+          [(("  " (from 1 0 to 1 8)))
+           (type (code "(define (f)" "        ") "\n" 1 8)]
+          ;; consecutive newlines
+          [(("  " (from 2 0 to 2 2)))
+           (type (code "(define (f)" "" "") "\n" 2 0)]
+          ;; comments
+          [(("  " (from 1 0 to 1 2)))
+           (type (code "(define (f) ; c" "") "\n" 1 0)]
+          [(("  " (from 2 0 to 2 2)))
+           (type (code "(define (f)" "  ; comment" "") "\n" 2 0)]
+          [(("  " (from 1 0 to 1 2)))
+           (type (code "(define (f)" "" "#;(g x)") "\n" 1 0)]
+          [() (type (code "#|" "") "\n" 1 0)]
+          [() (type (code "#| text" "" "|#") "\n" 1 0)]
+          ;; tab reindents the current line
+          [(("  x)" (from 1 0 to 1 4)))
+           (type (code "(define (f)" "x)") "\t" 1 0)]
+          [(("  x)" (from 1 0 to 1 4)))
+           (type (code "(define (f)" "\tx)") "\t" 1 1)]
+          [() (type (code "(define (f)" "  x)") "\t" 1 2)]
+          ;; tab on the first line, with an open paren further down
+          [() (type (code "x" "(define (f)") "\t" 0 0)]
+          [() (type (code "(define (f)" "  (let (") "\t" 0 0)]
+
+          ;; These need more than the prior line for context. The
+          ;; comment on each says how many prior lines are needed.
+          ;; 2: prior line is a balanced binding
+          [(("      " (from 2 0 to 2 6)))
+           (type (code "(let ([a 1]" "      [b 2]" "") "\n" 2 0)]
+          ;; 2: prior line closes the bindings
+          [(("    " (from 3 0 to 3 4)))
+           (type (code "(define (f x)" "  (let ([a 1]" "        [b 2])" "")
+             "\n" 3 0)]
+          ;; 2: prior line is balanced
+          [(("      " (from 4 0 to 4 6)))
+           (type (code "(define (f)" "  (let ([x 1])" "    (when x" "      (g x)" "")
+             "\n" 4 0)]
+          ;; 3: prior line closes a form opened two lines up
+          [(("  " (from 3 0 to 3 2)))
+           (type (code "(define (f)" "  (g x" "     y)" "") "\n" 3 0)]
+          [((" " (from 3 0 to 3 1)))
+           (type (code "(cond" " [(zero? x)" "  1]" "") "\n" 3 0)]
+          [(("  " (from 3 0 to 3 2)))
+           (type (code "(define (f)" "  #;(g" "     x)" "") "\n" 3 0)]
+          ;; all: balanced siblings, so only the enclosing define helps
+          [(("  " (from 5 0 to 5 2)))
+           (type (code "(define (f)" "  (a)" "  (b)" "  (c)" "  (d)" "")
+             "\n" 5 0)]
+          [(("  " (from 5 0 to 5 2)))
+           (type (code "(define (f)" "  (a)" "" "  (b)" "  (c)" "") "\n" 5 0)]
+          ;; all: code-like text in a block comment opened far above
+          [() (type (code "#|" "text" "more text" "  (foo" "") "\n" 4 0)]
+
+          ;; Code that does not follow these indentation rules must
+          ;; not be reindented, so the new line follows the rules
+          ;; relative to the existing indentation of the enclosing
+          ;; form.
+          [(("     " (from 3 0 to 3 5)))
+           (type (code "(define (f x)" "    (cond" "      [(zero? x) 1]" "")
+             "\n" 3 0)]
+          [(("      " (from 2 0 to 2 6)))
+           (type (code "(define (f)" "    (let ([x 1])" "") "\n" 2 0)]
+
+          ;; Parens in strings, character literals, and comments do
+          ;; not open or close forms.
+          [(("  " (from 3 0 to 3 2)))
+           (type (code "(define (f)" "  (g \"a (" "b\")" "") "\n" 3 0)]
+          [(("  " (from 2 0 to 2 2)))
+           (type (code "(define (f)" "  (g #\\) #\\[)" "") "\n" 2 0)]
+          [(("  " (from 2 0 to 2 2)))
+           (type (code "(define (f)" "  (g x) ; (" "") "\n" 2 0)]
+          [(("  " (from 4 0 to 4 2)))
+           (type (code "(define (f)" "  #| ( #| ( |#" "  ( |#" "  (g x)" "") "\n" 4 0)]
+
+          ;; newline inside a string leaves the string alone
+          [() (type (code "(display \"hello" "" "world\")") "\n" 1 0)]
+          [() (type (code "(define (f)" "  (display \"hello" "world\"))") "\n" 2 0)]
+          [() (type (code "(define (f)" "  (g \"a \\\" (" "") "\n" 2 0)]
+          [() (type (code "(display \"hello" "") "\n" 1 0)]
+          [() (type (code "(define (f)" "  (g '|a b" "c|))") "\n" 2 0)])
+         'ok)
+        (did-close uri)
+        'ok))))
+
+(isolate-mat format-on-type-string-start ()
+  ;; The form enclosing the new line opens on a line that begins inside
+  ;; a string. The new line is still indented relative to the form.
+  (let ([rpc (start-lsp-server #f)])
+    (on-exit (stop-lsp-server rpc)
+      (let ([uri "file:///tmp/string-start.ss"])
+        (did-open uri (code "(define msg \"first" "second\" (list 1" "" ""))
+        (match-let*
+         ([(,edit) (format-on-type uri "\n" 2 0)])
+         (assert (equal? (json:get edit 'newText) (make-string 10 #\space))))
+        (did-close uri)))))
 
 (isolate-mat symbols ()
   (define-tuple <doc-symbol>
