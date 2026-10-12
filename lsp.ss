@@ -528,7 +528,7 @@
             [(not id)
              (let ([method (json:get msg 'method)]
                    [params (json:ref msg 'params #f)])
-               `#(reply ok ,(handle-notify method params state)))]
+               `#(reply ok ,(do-handle-notify method params state)))]
             [(and (string? id) (ht:ref ($state requests) id #f))
              (trace-expr 'received-reply)
              (trace-msg msg)
@@ -695,6 +695,13 @@
          (fprintf (console-error-port) "*** Unhandled message ~s ***\n" method)
          (trace-msg (json:make-object [id id] [method method] [params params]))
          `#(ignore ,state)]))
+
+    (define (do-handle-notify method params state)
+      (match (try (handle-notify method params state))
+        [`(catch ,reason)
+         (trace-expr `(do-handle-notify => ,(exit-reason->english reason)))
+         state]
+        [,state state]))
 
     (define (handle-notify method params state)
       (match method
