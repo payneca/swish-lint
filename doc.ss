@@ -94,7 +94,7 @@
                      [cursor cursor]
                      [worker-pid pid]))))]
           [else
-           `#(no-reply ($state copy [cursor cursor]))]))]))
+           `#(no-reply ,($state copy [cursor cursor]))]))]))
 
   (define (handle-info msg state)
     (match msg
