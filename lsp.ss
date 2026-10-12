@@ -527,7 +527,7 @@
            (cond
             [(not id)
              (let ([method (json:get msg 'method)]
-                   [params (json:get msg 'params)])
+                   [params (json:ref msg 'params #f)])
                `#(reply ok ,(handle-notify method params state)))]
             [(and (string? id) (ht:ref ($state requests) id #f))
              (trace-expr 'received-reply)
@@ -535,7 +535,7 @@
              `#(reply ok ,($state copy* [requests (ht:delete requests id)]))]
             [else
              (let ([method (json:get msg 'method)]
-                   [params (json:get msg 'params)])
+                   [params (json:ref msg 'params #f)])
                `#(reply ok ,(do-handle-request id method params state)))]))]))
     (define (handle-cast msg state) (match msg))
     (define (handle-info msg state)
