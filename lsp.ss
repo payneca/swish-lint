@@ -47,21 +47,28 @@
    )
 
   (define (lsp:read-loop ip proc)
-    (let lp ([header '()])
+    (let lp ()
       (let ([line (get-line ip)])
-        (if (string=? line "")
-            (lp header)
-            (match (pregexp-match (re "(\\S+): (\\S+)") line)
-              [(,_ ,key ,val) (lp (cons (cons key val) header))]
-              [#f
-               (proc (json:read ip))
-               (lp '())])))))
+        (cond
+         [(eof-object? line)]
+         [(string=? line "") (lp)]
+         [else
+          (match (pregexp-match (re "\\S+: \\S+") line)
+            [(,_) (lp)]
+            [#f                      ; we hit the end-of-header marker
+             (proc (json:read ip))
+             (lp)])]))))
 
   (define (lsp:start-reader ip proc)
     `#(ok
        ,(spawn&link
          (lambda ()
-           (lsp:read-loop ip proc)))))
+           (lsp:read-loop ip proc)
+           ;; EOF: The client is gone. Let the "exit" handler shutdown
+           ;; with the correct status.
+           (proc
+            (json:make-object
+             [method "exit"]))))))
 
   (define (lsp:write-msg op msg)
     (let* ([bv (json:object->bytevector msg)]
@@ -801,7 +808,7 @@
         permanent 1000 worker)
       #(lsp:reader
         ,(lambda () (lsp:start-reader ip lsp-server:incoming-message))
-        permanent 1000 worker)))
+        transient 1000 worker)))
 
   (define (lsp:start-server port-number ip op)
     (trace-init)
