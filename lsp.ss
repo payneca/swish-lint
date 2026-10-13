@@ -533,6 +533,10 @@
              (trace-expr 'received-reply)
              (trace-msg msg)
              `#(reply ok ,($state copy* [requests (ht:delete requests id)]))]
+            [(not (json:ref msg 'method #f))
+             ;; A response to a request we are not waiting for
+             (trace-expr `(unexpected-response ,id))
+             `#(reply ok ,state)]
             [else
              (let ([method (json:get msg 'method)]
                    [params (json:ref msg 'params #f)])
