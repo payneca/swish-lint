@@ -32,6 +32,7 @@
    )
   (import
    (chezscheme)
+   (json)
    (swish imports)
    )
 
@@ -98,6 +99,16 @@
          (match (json:ref msg 'id #f)
            [#f
             (call-event-handler msg ($state event-handlers))
+            `#(no-reply ,state)]
+           [,id
+            (guard (json:ref msg 'method #f))
+            ;; A request from the server. Reply with a null result.
+            (call-event-handler msg ($state event-handlers))
+            (write-msg
+             (json:make-object
+              [jsonrpc "2.0"]
+              [id id]
+              [result json-null]))
             `#(no-reply ,state)]
            [,id
             (match (ht:ref ($state id-map) id #f)
