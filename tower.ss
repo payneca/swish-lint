@@ -37,6 +37,10 @@
 
   (define verbosity (make-parameter 0))
 
+  ;; When ranking completions, a reference N lines below the cursor
+  ;; counts as N * completion-below-cost lines away.
+  (define completion-below-cost 4)
+
   (define (mapn f ls)
     (let lp ([i 0] [ls ls])
       (if (null? ls)
@@ -179,9 +183,18 @@ substr(F.filename,-3)='.ss' desc, F.filename asc, D.line asc"
                (transaction 'log-db
                  (let ([file-fk (scalar (execute "select file_pk from files where filename=?" filename))]
                        [pre1 (prefix-integer prefix)])
+                   ;; distance: the weighted distance in lines from the
+                   ;; cursor to the nearest reference in this file. A
+                   ;; new local is most likely defined above the
+                   ;; cursor, so references below cost more. Names
+                   ;; with no reference in this file have a null
+                   ;; distance and sort after the rest.
                    (execute "
 select
-  case when file_fk=?4 then sum(?5 - min(0, line)) else 0 end as rank
+  min(case when refs.file_fk=?4 then
+        case when refs.line <= ?5 then ?5 - refs.line
+             else (refs.line - ?5) * ?6 end
+      end) as distance
   ,count(refs.name) as count
   ,candidates.name
 from
@@ -193,23 +206,29 @@ from
 left outer join refs
 on candidates.name = refs.name
 group by candidates.name
-order by rank desc, count desc, candidates.name asc"
-                     pre1 pat root-fk file-fk line)))]
+order by distance is null, distance asc, count desc, candidates.name asc"
+                     pre1 pat root-fk file-fk line completion-below-cost)))]
+              ;; Drop the identifier under the cursor when it's the
+              ;; only reference. It need not be the first row, since a
+              ;; candidate on the same line may rank ahead of it.
               [rows
-               (match rows
-                 [(#(,_ 1 ,@prefix) . ,rest) rest]
-                 [,_ rows])]
+               (remp
+                (lambda (row)
+                  (match row
+                    [#(,_ 1 ,@prefix) #t]
+                    [,_ #f]))
+                rows)]
               [nrows (length rows)]
               [completions
                (mapn
                 (lambda (i row)
                   (match row
-                    [#(,rank ,count ,name)
+                    [#(,distance ,count ,name)
                      (let ([sortText (format "~6d" i)]
                            [score (- 1.0 (/ i nrows))])
                        (json:make-object
                         [label name]
-                        ;;[detail (format "| rank:~a | count:~a | sort: ~a | score: ~a" rank count sortText score)]
+                        ;;[detail (format "| distance:~a | count:~a | sort: ~a | score: ~a" distance count sortText score)]
                         [sortText sortText]
                         [score score]))]))
                 rows)]
