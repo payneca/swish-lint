@@ -392,6 +392,29 @@
           [,_ (did-save uri "(let ([_a%bc 12]) (+ _a 12))")]
           [("_a%bc") (extract-labels (get-completions uri 0 24))])
          'ok)
+        ;; Rank by weighted distance to the nearest reference in this
+        ;; file. Nearer references above the cursor rank first.
+        ;; References below the cursor cost 4 lines per line, so
+        ;; zbelow (1 line below) ranks after zfive (3 lines above).
+        ;; Names with no reference in this file come last.
+        (match-let*
+         ([,_ (did-save uri
+                (join
+                 '("(let ([zfive 5]"
+                   "      [zfour 4])"
+                   "  (define zthree 3)"
+                   "  (+ z"
+                   "     zbelow))")
+                 #\newline))]
+          [("zthree" "zfour" "zfive" "zbelow" "zero?")
+           (extract-labels (get-completions uri 3 6))])
+         'ok)
+        ;; The identifier under the cursor should be excluded even
+        ;; when another candidate on the same line ranks ahead of it.
+        (match-let*
+         ([,_ (did-save uri "(let ([zyx 12]) (+ zyx z))")]
+          [("zyx" "zero?") (extract-labels (get-completions uri 0 24))])
+         'ok)
         (did-close uri)
         'ok))))
 
