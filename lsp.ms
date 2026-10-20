@@ -737,7 +737,7 @@
                  [line 1]
                  [column 10]
                  [message ,msg]))))
-           (parameterize ([optional-checkers (list (make-external-checker (list fn)))])
+           (parameterize ([optional-checkers (list (make-external-checker (script-command fn)))])
              (did-save uri         ; must save to run external checker
                (code
                 "(car 12)"))
