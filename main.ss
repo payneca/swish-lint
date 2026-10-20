@@ -64,6 +64,7 @@
    [user-config --user-config bool "load user configuration"]
    [verbose -v count "show debug messages (tower and indent only)"]
    [version --version bool "print version information"]
+   [stdio --stdio bool "Visual Studio Code insists on providing this argument"] ; ignored
    [files (list . "file") "check file"]))
 
 (software-info:install)
