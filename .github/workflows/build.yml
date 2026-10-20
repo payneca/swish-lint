@@ -1,0 +1,237 @@
+---
+name: Build
+on: [push, workflow_dispatch]
+permissions:
+  contents: read
+  actions: read
+env:
+  CHEZ_REF: v10.4.1
+  SWISH_REF: 6c306265e066c4047b7d19b158f0f2503cb3872d
+  CACHE_VERSION: v1
+  TOOLS_VERSION: v1
+jobs:
+  chez-boot:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: ${{ github.workspace }}
+    outputs:
+      BOOT_KEY: ${{ steps.keys.outputs.BOOT_KEY }}
+    steps:
+      - name: Compute cache keys
+        id: keys
+        run: |
+          CHEZ_HASH="$(git ls-remote https://github.com/cisco/ChezScheme.git "refs/tags/${CHEZ_REF}" | cut -f1)"
+          test -n "${CHEZ_HASH}"
+          echo "BOOT_KEY=boot-${CACHE_VERSION}-${CHEZ_HASH}" >> "${GITHUB_OUTPUT}"
+      - name: Check for cached tools
+        # Boot files are needed only to build tools that aren't cached.
+        id: tools
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEFAULT_REF: refs/heads/${{ github.event.repository.default_branch }}
+        run: |
+          PREFIX="tools-${TOOLS_VERSION}-${CHEZ_REF}-${SWISH_REF}-"
+          # caches are visible to this ref and to the default branch
+          KEYS="$(for REF in "${GITHUB_REF}" "${DEFAULT_REF}"; do
+            gh cache list -R "${GITHUB_REPOSITORY}" --ref "${REF}" --key "${PREFIX}" --limit 100 --json key -q '.[].key'
+          done)"
+          ALL=true
+          # keep in sync with the build matrix
+          for M in a6le arm64le arm64osx a6nt; do
+            grep -qxF "${PREFIX}${M}" <<< "${KEYS}" || ALL=false
+          done
+          echo "all-cached=${ALL}" >> "${GITHUB_OUTPUT}"
+      - name: Look up Chez Scheme .git / boot file cache
+        id: boot
+        if: ${{ steps.tools.outputs.all-cached != 'true' }}
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            ChezScheme/boot
+            ChezScheme/.git*
+          key: ${{ steps.keys.outputs.BOOT_KEY }}
+          enableCrossOsArchive: true
+          lookup-only: true
+      - name: Populate boot file cache
+        id: populate
+        if: ${{ steps.tools.outputs.all-cached != 'true' && steps.boot.outputs.cache-hit != 'true' }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install libsystemd-dev libx11-dev uuid-dev
+          git clone --filter=blob:none https://github.com/cisco/ChezScheme.git
+          cd ChezScheme
+          git checkout v10.3.0
+          ./configure -m=a6le
+          make kernel
+          mkdir -p ../build/bin ../build/lib/csv10.3.0/a6le
+          cp a6le/bin/a6le/* ../build/bin
+          cp boot/a6le/* ../build/lib/csv10.3.0/a6le
+          export PATH=$(realpath ../build/bin):${PATH}
+          export SCHEMEHEAPDIRS=$(realpath ../build/lib/csv10.3.0/a6le):
+          git checkout "${CHEZ_REF}"
+          git clean -dxf .
+          ./configure --force -m=a6le
+          make re.boot
+          make
+          make bootquick XM=arm64le
+          make bootquick XM=arm64osx
+          make bootquick XM=a6nt
+      - name: Save Chez Scheme .git / boot file cache
+        if: ${{ steps.populate.outcome == 'success' }}
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            ChezScheme/boot
+            ChezScheme/.git*
+          key: ${{ steps.keys.outputs.BOOT_KEY }}
+          enableCrossOsArchive: true
+  build:
+    needs: chez-boot
+    strategy:
+      fail-fast: false
+      matrix:
+        # keep in sync with the chez-boot job
+        include:
+          - machine: a6le
+            os: ubuntu-24.04
+          - machine: arm64le
+            os: ubuntu-24.04-arm
+          - machine: arm64osx
+            os: macos-15
+          - machine: a6nt
+            os: windows-2025
+    runs-on: ${{ matrix.os }}
+    env:
+      M: ${{ matrix.machine }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: ${{ github.workspace }}
+    steps:
+      - name: Setup Linux
+        if: ${{ runner.os == 'Linux' }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install libsystemd-dev libx11-dev uuid-dev libncurses-dev
+      - name: Setup Mac
+        if: ${{ runner.os == 'macOS' }}
+        run: brew install coreutils
+      - name: Setup Windows
+        if: ${{ runner.os == 'Windows' }}
+        run: git config --global core.autocrlf false
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          # keep swish-test from finding the .ms files of Chez Scheme and Swish
+          path: swish-lint
+          fetch-depth: 0
+      - name: Restore Chez Scheme / Swish cache
+        id: tools
+        uses: actions/cache/restore@v5
+        with:
+          path: tools
+          key: tools-${{ env.TOOLS_VERSION }}-${{ env.CHEZ_REF }}-${{ env.SWISH_REF }}-${{ matrix.machine }}
+      - name: Restore Chez Scheme .git / boot file cache
+        id: boot
+        if: ${{ steps.tools.outputs.cache-hit != 'true' }}
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            ChezScheme/boot
+            ChezScheme/.git*
+          key: ${{ needs.chez-boot.outputs.BOOT_KEY }}
+          enableCrossOsArchive: true
+      - name: Fail if no boot file cache
+        if: ${{ steps.tools.outputs.cache-hit != 'true' && steps.boot.outputs.cache-hit != 'true' }}
+        run: exit 1
+      - name: Build Chez Scheme
+        if: ${{ steps.tools.outputs.cache-hit != 'true' }}
+        run: |
+          cd ChezScheme
+          git checkout -q -f "${CHEZ_REF}"
+          git reset --hard "${CHEZ_REF}"
+          ./configure -m=$M --force
+          make bin/zuo
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cmd //c build.bat $M //force //as-is //MD //kernel
+          else
+            ./bin/zuo $M kernel
+          fi
+      - name: Build Swish
+        # Point configure at the Chez Scheme workarea so it finds the
+        # boot files, scheme.h, and kernel relative to the executable.
+        # Install the batteries so tools/swish runs without Chez Scheme.
+        if: ${{ steps.tools.outputs.cache-hit != 'true' }}
+        run: |
+          SCHEME="$(cd ChezScheme/$M/bin/$M && pwd)/scheme"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            SCHEME="${SCHEME}.exe"
+          fi
+          INSTALLROOT="$PWD/tools/swish"
+          git clone --filter=blob:none https://github.com/becls/swish.git
+          cd swish
+          git checkout -q "${SWISH_REF}"
+          ./configure --scheme="${SCHEME}"
+          make
+          make -C src/swish install-bin install-batteries INSTALLROOT="${INSTALLROOT}"
+      - name: Save Chez Scheme / Swish cache
+        # save now so that swish-lint failures don't discard the cache
+        if: ${{ steps.tools.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v5
+        with:
+          path: tools
+          key: ${{ steps.tools.outputs.cache-primary-key }}
+      - name: Set PATH for Swish
+        # Use the lib directory rather than bin: swish loads swish.boot
+        # from beside its executable, copy-dlls looks there for the
+        # Windows DLLs, and bin/swish is a copy without .exe on Windows.
+        run: |
+          SWISH_LIB="$(echo "$PWD"/tools/swish/lib/swish*/"$M")"
+          test -d "$SWISH_LIB"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            SWISH_LIB="$(cygpath -u "$SWISH_LIB")"
+          fi
+          echo "$SWISH_LIB" >> $GITHUB_PATH
+      - name: Use MSYS2 make for swish-lint
+        # The native Windows make runs simple commands with CreateProcess,
+        # which can't run the swish-build and swish-test scripts.
+        # MSYS2 make always runs commands through sh.
+        if: ${{ runner.os == 'Windows' }}
+        run: |
+          C:/msys64/usr/bin/pacman -S --noconfirm --needed make
+          echo "MAKE_PROG=C:/msys64/usr/bin/make.exe" >> $GITHUB_ENV
+          # MSYS2 make does not see OS=Windows_NT, which the Makefile uses
+          # to build swish-lint.exe and install the DLLs.
+          echo "MAKE_VARS=OS=Windows_NT" >> $GITHUB_ENV
+      - name: Build swish-lint
+        run: |
+          swish --version
+          "${MAKE_PROG:-make}" ${MAKE_VARS:-} -C swish-lint
+      - name: Run tests
+        run: |
+          "${MAKE_PROG:-make}" ${MAKE_VARS:-} -C swish-lint test
+      - name: Archive test results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: mat-report-${{ matrix.machine }}
+          path: swish-lint/mat-report.html
+          if-no-files-found: ignore
+      - name: Assemble tarball
+        run: |
+          "${MAKE_PROG:-make}" ${MAKE_VARS:-} -C swish-lint install INSTALLROOT="$PWD/dist/swish-lint"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            for f in swish-lint.exe csv*.dll uv.dll osi.dll sqlite3.dll; do
+              ls dist/swish-lint/$f
+            done
+          fi
+          TARBALL="swish-lint-$(cat swish-lint/git.tag)-$M.tar.gz"
+          tar -czvf "$TARBALL" -C dist swish-lint
+          echo "TARBALL=$TARBALL" >> $GITHUB_ENV
+      - name: Archive build artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: swish-lint-${{ matrix.machine }}
+          path: ${{ env.TARBALL }}
