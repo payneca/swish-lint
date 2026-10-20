@@ -155,7 +155,7 @@
        '((printf "args: ~s\n" (command-line-arguments))))
      (match-let*
       ([,check (make-external-checker
-                (list fn
+                (script-command fn
                   "--option"
                   'filename
                   '(filename "\\.ss$")))]
@@ -176,7 +176,7 @@
            [message (format "args: ~s" (command-line-arguments))]))))
      (match-let*
       ([,check (make-external-checker
-                (list fn
+                (script-command fn
                   "--option"
                   'filename
                   '(filename "\\.ss$")))]
@@ -211,7 +211,7 @@
            [line 10]
            [message ,msg3]))))
      (match-let*
-      ([,check (make-external-checker (list fn))]
+      ([,check (make-external-checker (script-command fn))]
        [,results '()]
        [,_ (check "file:///tmp/foo.ss" #t #f ""
              (lambda (x type fmt . args)
@@ -234,7 +234,7 @@
          (newline (current-output-port))
          ))
      (match-let*
-      ([,check (make-external-checker (list fn))]
+      ([,check (make-external-checker (script-command fn))]
        [,results '()]
        [(,tp ,get-trace)
         (let-values ([(p get) (open-string-output-port)])
