@@ -25,6 +25,7 @@
    actual-dir
    disarm-user-config
    expected-dir
+   script-command
    support-dir
    with-tmp-dir
    write-script
@@ -58,4 +59,10 @@
         (fprintf op "#!/usr/bin/env swish\n")
         (for-each (lambda (x) (write x op) (newline op)) exprs)))
     (set-file-mode fn #o777))
+
+  ;; Windows can't run a script directly, so run it with swish.
+  (define (script-command fn . args)
+    (if windows?
+        (list* (osi_get_executable_path) fn args)
+        (cons fn args)))
   )
