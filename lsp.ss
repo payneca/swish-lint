@@ -702,25 +702,26 @@
         [req->pid (ht:delete req->pid id)]
         [pid->req (ht:delete pid->req pid)]))
 
-    (define (updated uri change version skip-delay? progress state)
-      (let ([old (ht:ref ($state uri->doc) uri #f)]
-            [worker (ht:ref ($state uri->worker) uri #f)])
-        (when worker (kill worker 'cancelled))
-        (let* ([version (or version (and old (doc:version old)))]
-               [doc
-                (cond
-                 [(not change) (string->doc "" version)]
-                 [(string? change) (string->doc change version)]
-                 [else
+    (define (set-worker uri worker state)
+      (let ([old (ht:ref ($state uri->worker) uri #f)])
+        (when old (kill old 'cancelled)))
+      ($state copy* [uri->worker (ht:set uri->worker uri worker)]))
+
+    ;; uri->doc holds only open documents. Files that are indexed from
+    ;; disk have only a worker, which opening the file cancels.
+    (define (index-file uri progress state)
+      (set-worker uri (start-update-refs uri progress) state))
+
+    (define (updated uri change version skip-delay? state)
+      (let* ([old (ht:ref ($state uri->doc) uri #f)]
+             [version (or version (and old (doc:version old)))]
+             [doc
+              (if (string? change)
+                  (string->doc change version)
                   (doc:apply-changes (or old (string->doc "" #f)) version
-                    change)])]
-               [worker
-                (if change
-                    (start-check uri doc skip-delay?)
-                    (start-update-refs uri progress))])
-          ($state copy*
-            [uri->doc (ht:set uri->doc uri doc)]
-            [uri->worker (ht:set uri->worker uri worker)]))))
+                    change))])
+        (set-worker uri (start-check uri doc skip-delay?)
+          ($state copy* [uri->doc (ht:set uri->doc uri doc)]))))
 
     (define (do-handle-request id method params state)
       (match (try (handle-request id method params state))
@@ -933,20 +934,19 @@
                     [else
                      (fold-left
                       (lambda (state fn)
-                        (updated (abs-path->uri fn) #f #f #t progress state))
+                        (index-file (abs-path->uri fn) progress state))
                       state
                       files)])))))]
           [else state])]
         ["textDocument/didOpen"
          (let ([doc (json:get params 'textDocument)])
            (updated (json:get doc 'uri) (json:get doc 'text)
-             (json:ref doc 'version #f) #t #f state))]
+             (json:ref doc 'version #f) #t state))]
         ["textDocument/didChange"
          (updated
           (json:get params '(textDocument uri))
           (json:get params 'contentChanges)
           (json:ref params '(textDocument version) #f)
-          #f
           #f
           state)]
         ["textDocument/didSave"
@@ -955,7 +955,6 @@
           (json:get params 'text)
           #f
           #t
-          #f
           state)]
         ["textDocument/didClose" state]
         ["workspace/didChangeConfiguration"
