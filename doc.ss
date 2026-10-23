@@ -22,104 +22,165 @@
 
 (library (doc)
   (export
-   doc:get-text
-   doc:get-value-near
-   doc:start
-   doc:start&link
-   doc:updated
+   doc:apply-changes
+   doc:line
+   doc:read
+   doc:source-table
+   doc:text
+   doc:value-near
+   doc:version
+   string->doc
    )
   (import
    (chezscheme)
-   (cursor)
+   (json)
    (read)
    (swish imports)
    (trace)
    )
 
-  (define-state-tuple <document> cursor worker-pid on-changed)
+  ;; A doc is one version of one file's text. It is immutable, so it can
+  ;; be handed to any process without copying. Derived values are
+  ;; computed on first use and cached on the doc, so every consumer of
+  ;; a version shares one source table and one read.
+  (define-record-type doc
+    (nongenerative)
+    (sealed #t)
+    (fields
+     (immutable version)
+     (immutable text)
+     (mutable source-table)            ; #f | source table
+     (mutable read-result))            ; #f | annotated code | a fault
+    (protocol
+     (lambda (new)
+       (lambda (version text source-table)
+         (new version text source-table #f)))))
 
-  (define (init on-changed)
-    `#(ok ,(<document> make
-             [cursor #f]
-             [worker-pid #f]
-             [on-changed on-changed])))
+  ;; Processes are preempted, so another process may fill the field
+  ;; while compute runs. The long work runs with interrupts enabled;
+  ;; only the re-check and store are atomic, and the first value
+  ;; stored wins.
+  (define (fill! d get put! compute)
+    (or (get d)
+        (let ([v (compute)])
+          (with-interrupts-disabled
+           (or (get d)
+               (begin (put! d v) v))))))
 
-  (define (terminate reason state) 'ok)
+  (define (string->doc text version)
+    (make-doc version text #f))
 
-  (define (handle-call msg from state)
-    (match msg
-      [get-text
-       `#(reply ,(cursor->string ($state cursor)) ,state)]
-      [#(get-value-near ,line1 ,char1)
-       (trace-time `(get-value-near ,line1 ,char1)
-         (let* ([cursor (cursor:goto-line! ($state cursor) (fx- line1 1))]
-                [text (line-str (cursor-line cursor))])
-           (define (->string value bfp efp)
-             (let ([offset (match value
-                             [,_ (guard (symbol? value)) 0]
-                             [($primitive ,value) 2]
-                             [($primitive ,_ ,value) 3]
-                             [,_ #f])])
-               (and offset
-                    (substring text (+ bfp offset) efp))))
-           (match (try
-                   (let-values ([(type value bfp efp)
-                                 (read-token-near/col text char1)])
-                     (and (eq? type 'atomic)
-                          (->string value bfp efp))))
-             [`(catch ,reason)
-              (trace-expr
-               `(get-value-near ,line1 ,char1 => ,(exit-reason->english reason)))
-              `#(reply #f ,state)]
-             ["" `#(reply #f ,state)]
-             [,result
-              `#(reply ,result ,state)])))]))
+  (define (doc:text d) (doc-text d))
 
-  (define (handle-cast msg state)
-    (match msg
-      [#(updated ,change ,skip-delay?)
-       (let ([pid ($state worker-pid)])
-         (when pid (kill pid 'cancelled)))
-       (let ([cursor
-              (cond
-               [(not change) (string->cursor "")]
-               [(string? change) (string->cursor change)]
-               [else (lsp:change-content ($state cursor) change)])])
-         (cond
-          [($state on-changed) =>
-           (lambda (on-changed)
-             (let ([pid (on-changed change (cursor:copy cursor) skip-delay?)])
-               (monitor pid)
-               `#(no-reply
-                  ,($state copy
-                     [cursor cursor]
-                     [worker-pid pid]))))]
-          [else
-           `#(no-reply ,($state copy [cursor cursor]))]))]))
+  (define (doc:version d) (doc-version d))
 
-  (define (handle-info msg state)
-    (match msg
-      [`(DOWN ,_ ,pid ,reason)
-       (cond
-        [(eq? pid ($state worker-pid))
-         (unless (eq? reason 'normal)
-           (trace-expr `(doc-worker ,(exit-reason->english reason))))
-         `#(no-reply ,($state copy [worker-pid #f]))]
-        [else
-         `#(no-reply ,state)])]))
+  (define (doc:source-table d)
+    (fill! d doc-source-table doc-source-table-set!
+      (lambda () (make-code-lookup-table (doc-text d)))))
 
-  (define (doc:start&link on-changed)
-    (gen-server:start&link #f on-changed))
+  ;; Returns the annotated code or a fault.
+  (define (doc:read d)
+    (fill! d doc-read-result doc-read-result-set!
+      (lambda () (try (read-code (doc-text d))))))
 
-  (define (doc:start on-changed)
-    (gen-server:start #f on-changed))
+  ;; End of line0's text, before its newline.
+  (define (line-end text table line0)
+    (let ([next (fx+ line0 1)])
+      (if (fx< next (vector-length table))
+          (fx- (vector-ref table next) 1)
+          (string-length text))))
 
-  (define (doc:get-text who)
-    (gen-server:call who 'get-text))
+  (define (doc:line d line0)
+    (let ([text (doc-text d)]
+          [table (doc:source-table d)])
+      (substring text (vector-ref table line0) (line-end text table line0))))
 
-  (define (doc:get-value-near who line1 char1)
-    (gen-server:call who `#(get-value-near ,line1 ,char1)))
+  ;; Clamp the character to the line's length, and a line past the end
+  ;; to the end of the text.
+  (define (pos->line/fp text table line char)
+    (let ([last (fx- (vector-length table) 1)])
+      (if (> line last)
+          (values last (string-length text))
+          (let ([start (vector-ref table line)])
+            (values line
+              (+ start (min char (- (line-end text table line) start))))))))
 
-  (define (doc:updated who change skip-delay?)
-    (gen-server:cast who `#(updated ,change ,skip-delay?)))
+  ;; Lines sl through el are replaced by new, which spans sfp to efp in
+  ;; the old text. Keep the starts of lines before the edit, add one
+  ;; for each newline in new, and shift the starts after the edit.
+  (define (splice-table table sl el sfp efp new)
+    (let* ([n (vector-length table)]
+           [nls (let lp ([i (fx- (string-length new) 1)] [acc '()])
+                  (cond
+                   [(fx< i 0) acc]
+                   [(char=? (string-ref new i) #\newline)
+                    (lp (fx- i 1) (cons (fx+ sfp i 1) acc))]
+                   [else (lp (fx- i 1) acc)]))]
+           [shift (fx- (string-length new) (fx- efp sfp))]
+           [tail (fx- n (fx+ el 1))]
+           [result (make-vector (fx+ sl 1 (length nls) tail))])
+      (do ([i 0 (fx+ i 1)]) ((fx> i sl))
+        (vector-set! result i (vector-ref table i)))
+      (let lp ([nls nls] [i (fx+ sl 1)])
+        (match nls
+          [(,fp . ,rest)
+           (vector-set! result i fp)
+           (lp rest (fx+ i 1))]
+          [()
+           (do ([j 0 (fx+ j 1)]) ((fx= j tail))
+             (vector-set! result (fx+ i j)
+               (fx+ (vector-ref table (fx+ el 1 j)) shift)))]))
+      result))
+
+  (define (apply-change d version delta)
+    (let ([new (json:get delta 'text)]
+          [range (json:ref delta 'range #f)])
+      (cond
+       [range
+        (let ([old (doc-text d)]
+              [table (doc:source-table d)])
+          (let*-values
+           ([(sl sfp) (pos->line/fp old table
+                        (json:get range '(start line))
+                        (json:get range '(start character)))]
+            [(el efp) (pos->line/fp old table
+                        (json:get range '(end line))
+                        (json:get range '(end character)))])
+           (let* ([olen (string-length old)]
+                  [nlen (string-length new)]
+                  [text (make-string (+ sfp nlen (- olen efp)))])
+             (string-copy! old 0 text 0 sfp)
+             (string-copy! new 0 text sfp nlen)
+             (string-copy! old efp text (+ sfp nlen) (- olen efp))
+             (make-doc version text (splice-table table sl el sfp efp new)))))]
+       [else
+        (string->doc new version)])))
+
+  (define (doc:apply-changes d version deltas)
+    (fold-left
+     (lambda (d delta) (apply-change d version delta))
+     d
+     deltas))
+
+  (define (doc:value-near d line1 char1)
+    (define (->string text value bfp efp)
+      (let ([offset (match value
+                      [,_ (guard (symbol? value)) 0]
+                      [($primitive ,value) 2]
+                      [($primitive ,_ ,value) 3]
+                      [,_ #f])])
+        (and offset
+             (substring text (+ bfp offset) efp))))
+    (match (try
+            (let ([text (doc:line d (fx- line1 1))])
+              (let-values ([(type value bfp efp)
+                            (read-token-near/col text char1)])
+                (and (eq? type 'atomic)
+                     (->string text value bfp efp)))))
+      [`(catch ,reason)
+       (trace-expr
+        `(get-value-near ,line1 ,char1 => ,(exit-reason->english reason)))
+       #f]
+      ["" #f]
+      [,result result]))
   )

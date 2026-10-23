@@ -819,6 +819,31 @@
         (did-close uri)
         'ok))))
 
+(isolate-mat formatting-snapshot ()
+  (let ([rpc (start-lsp-server #f)])
+    (on-exit (stop-lsp-server rpc)
+      (let ([uri "file:///tmp/snapshot.ss"]
+            [me self])
+        (did-open uri (code "(let ()" "(f))" ""))
+        (let ([expected (json:object->string (format-document uri))])
+          ;; A worker formats the version that was current when the
+          ;; request arrived, even if a change follows right away.
+          (rpc-client:send 'rpc
+            (json:make-object
+             [jsonrpc "2.0"]
+             [method "textDocument/formatting"]
+             [params
+              (json:make-object
+               [textDocument (json:make-object [uri uri])]
+               [options (json:make-object)])])
+            (lambda (id reply) (send me `#(formatted ,reply))))
+          (did-change uri (code "(let ()" "  (f))" ""))
+          (receive
+           [#(formatted ,reply)
+            (assert (equal? expected (json:object->string reply)))])
+          (assert (null? (format-document uri)))
+          (did-close uri))))))
+
 (isolate-mat semantic-tokens ()
   (define (get-semantic-tokens uri)
     (json:get

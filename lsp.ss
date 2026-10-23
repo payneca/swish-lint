@@ -33,7 +33,6 @@
    (chezscheme)
    (config)
    (config-params)
-   (cursor)
    (doc)
    (indent)
    (json)
@@ -175,18 +174,17 @@
        [uri uri]
        [diagnostics (current-diagnostics)])))
 
-  (define (start-check uri cursor skip-delay?)
+  (define (start-check uri doc skip-delay?)
     (spawn
      (lambda ()
        (unless skip-delay?
          (receive (after 1000 'ok)))
-       (let ([text (cursor->string cursor)])
-         (check uri text skip-delay?)
-         (publish-diagnostics uri)
-         (unless skip-delay?
-           (receive (after 30000 'ok)))
-         (check-line-whitespace text #t report)
-         (publish-diagnostics uri)))))
+       (check uri doc skip-delay?)
+       (publish-diagnostics uri)
+       (unless skip-delay?
+         (receive (after 30000 'ok)))
+       (check-line-whitespace (doc:text doc) #t report)
+       (publish-diagnostics uri))))
 
   (define (start-update-refs uri progress)
     (define pid
@@ -278,15 +276,16 @@
       [message (apply format fmt args)]
       [range (->lsp-range x)])))
 
-  (define (check uri text skip-delay?)
-    (match (try (read-code text))
+  (define (check uri doc skip-delay?)
+    (define text (doc:text doc))
+    (match (doc:read doc)
       [`(catch ,reason)
-       (let ([table (make-code-lookup-table text)])
+       (let ([table (doc:source-table doc)])
          (spawn-update-refs uri #f table text)
          (let-values ([(line msg) (reason->line/msg reason table)])
            (report line 'error msg)))]
       [,annotated-code
-       (let ([source-table (make-code-lookup-table text)])
+       (let ([source-table (doc:source-table doc)])
          (spawn-update-refs uri annotated-code source-table text)
          (current-source-table source-table)
          (check-import/export annotated-code report)
@@ -364,7 +363,7 @@
     (let ([line (+ line 1)]       ; LSP is 0-based
           #;[char (+ char 1)])    ; ... but we want the preceding char
       (cond
-       [(doc:get-value-near doc line char) =>
+       [(doc:value-near doc line char) =>
         (lambda (prefix)
           (tower-client:get-completions (uri->abs-path uri) line char prefix))]
        [else '()])))
@@ -428,7 +427,7 @@
         (if (< end start)
             '()
             (reverse
-             (fold-indent (doc:get-text doc) (+ start 1) (+ end 1) '()
+             (fold-indent (doc:text doc) (+ start 1) (+ end 1) '()
                (lambda (line old new acc)
                  (let ([line (- line 1)]) ; LSP is 0-based
                    (if (and (<= start line end)
@@ -445,8 +444,8 @@
 
   (define (format-on-type doc ch line0 char0)
     (trace-time 'format-on-type
-      (let* ([text (doc:get-text doc)]
-             [source-table (make-code-lookup-table text)]
+      (let* ([text (doc:text doc)]
+             [source-table (doc:source-table doc)]
              [line1 (+ line0 1)])
         (let-values ([(start-line1 paren-fp) (find-indent-start text line1)])
           (if (not start-line1)
@@ -498,7 +497,7 @@
       (match (try
               (let ([start (or (and range (json:ref range '(start line) #f)) 0)]
                     [end (or (and range (json:ref range '(end line) #f)) (fx- (most-positive-fixnum) 1))])
-                (semtok:encode (doc:get-text doc) start end semtok-mode)))
+                (semtok:encode (doc:text doc) start end semtok-mode)))
         [`(catch ,reason)
          (trace-expr `(semantic-tokens => ,(exit-reason->english reason)))
          json-null]
@@ -536,9 +535,11 @@
     (trace-time 'get-symbols
       (match
        (try
-        (let* ([text (doc:get-text doc)]
-               [source-table (make-code-lookup-table text)]
-               [annotated-code (read-code text)]
+        (let* ([text (doc:text doc)]
+               [source-table (doc:source-table doc)]
+               [annotated-code (match (doc:read doc)
+                                 [`(catch ,reason) (raise reason)]
+                                 [,code code])]
                [symbols '()])
           (define (range->lsp-range r)
             (<range> open r [bfp efp])
@@ -638,6 +639,7 @@
       req->pid
       pid->req
       uri->doc
+      uri->worker
       client-cap
       requests
       semtok-mode
@@ -652,6 +654,7 @@
                            (lambda (x) (or (fixnum? x) (string? x))))]
                [pid->req (ht:make process-id eq? process?)]
                [uri->doc (ht:make string-hash string=? string?)]
+               [uri->worker (ht:make string-hash string=? string?)]
                [client-cap #f]
                [requests (ht:make string-hash string=? string?)]
                [semtok-mode 'full]
@@ -699,25 +702,25 @@
         [req->pid (ht:delete req->pid id)]
         [pid->req (ht:delete pid->req pid)]))
 
-    (define (updated uri change skip-delay? progress state)
-      (define (doc-changed change cursor skip-delay?)
-        ;; called from inside doc gen-server process
-        (if change
-            (start-check uri cursor skip-delay?)
-            (start-update-refs uri progress)))
-      (let-values ([(doc state)
-                    (cond
-                     [(ht:ref ($state uri->doc) uri #f) =>
-                      (lambda (doc) (values doc state))]
-                     [else
-                      (match-let*
-                       ([#(ok ,pid)
-                         (watcher:start-child 'main-sup (gensym "document") 1000
-                           (lambda () (doc:start&link doc-changed)))])
-                       (values pid
-                         ($state copy* [uri->doc (ht:set uri->doc uri pid)])))])])
-        (doc:updated doc change skip-delay?)
-        state))
+    (define (updated uri change version skip-delay? progress state)
+      (let ([old (ht:ref ($state uri->doc) uri #f)]
+            [worker (ht:ref ($state uri->worker) uri #f)])
+        (when worker (kill worker 'cancelled))
+        (let* ([version (or version (and old (doc:version old)))]
+               [doc
+                (cond
+                 [(not change) (string->doc "" version)]
+                 [(string? change) (string->doc change version)]
+                 [else
+                  (doc:apply-changes (or old (string->doc "" #f)) version
+                    change)])]
+               [worker
+                (if change
+                    (start-check uri doc skip-delay?)
+                    (start-update-refs uri progress))])
+          ($state copy*
+            [uri->doc (ht:set uri->doc uri doc)]
+            [uri->worker (ht:set uri->worker uri worker)]))))
 
     (define (do-handle-request id method params state)
       (match (try (handle-request id method params state))
@@ -833,7 +836,7 @@
            (cond
             [(ht:ref ($state uri->doc) uri #f) =>
              (lambda (doc)
-               `#(ok ,(indent-range doc #f options) ,state))]
+               `#(spawn ,(lambda () (indent-range doc #f options)) ,state))]
             [else `#(ok () ,state)]))]
         ["textDocument/rangeFormatting"
          (let ([uri (json:get params '(textDocument uri))]
@@ -842,7 +845,7 @@
            (cond
             [(ht:ref ($state uri->doc) uri #f) =>
              (lambda (doc)
-               `#(ok ,(indent-range doc range options) ,state))]
+               `#(spawn ,(lambda () (indent-range doc range options)) ,state))]
             [else `#(ok () ,state)]))]
         ["textDocument/semanticTokens/range"
          (let ([uri (json:get params '(textDocument uri))]
@@ -877,7 +880,7 @@
            (cond
             [(ht:ref ($state uri->doc) uri #f) =>
              (lambda (doc)
-               `#(ok ,(format-on-type doc (string-ref ch 0) line char) ,state))]
+               `#(spawn ,(lambda () (format-on-type doc (string-ref ch 0) line char)) ,state))]
             [else `#(ok () ,state)]))]
         ["shutdown"
          (set! shutdown-requested? #t)
@@ -930,17 +933,19 @@
                     [else
                      (fold-left
                       (lambda (state fn)
-                        (updated (abs-path->uri fn) #f #t progress state))
+                        (updated (abs-path->uri fn) #f #f #t progress state))
                       state
                       files)])))))]
           [else state])]
         ["textDocument/didOpen"
          (let ([doc (json:get params 'textDocument)])
-           (updated (json:get doc 'uri) (json:get doc 'text) #t #f state))]
+           (updated (json:get doc 'uri) (json:get doc 'text)
+             (json:ref doc 'version #f) #t #f state))]
         ["textDocument/didChange"
          (updated
           (json:get params '(textDocument uri))
           (json:get params 'contentChanges)
+          (json:ref params '(textDocument version) #f)
           #f
           #f
           state)]
@@ -948,6 +953,7 @@
          (updated
           (json:get params '(textDocument uri))
           (json:get params 'text)
+          #f
           #t
           #f
           state)]
