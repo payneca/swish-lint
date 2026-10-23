@@ -659,6 +659,41 @@
         (for-each did-close uris)
         'ok))))
 
+(isolate-mat tower-reconnect ()
+  (define (get-defns uri line0 char0)
+    (map
+     (lambda (obj)
+       (list* (json:ref obj 'uri #f)
+         (extract-range (json:get obj 'range))))
+     (get-definitions uri line0 char0)))
+
+  (let ([rpc (start-lsp-server (get-real-path "."))])
+    (on-exit (stop-lsp-server rpc)
+      (define wait-for-test-sync (capture-test-sync))
+      (let* ([uri1 "file:///tmp/file1.ss"]
+             [uri2 "file:///tmp/file2.ss"]
+             [uris (list uri1 uri2)]
+             [foo-defn `((,uri1 from 0 8 to 0 11))])
+        (did-open uri1 "(define foo 12)")
+        (did-open uri2 "(list foo)")
+        (for-each wait-for-test-sync uris)
+        (assert (equal? foo-defn (get-defns uri2 0 7)))
+
+        ;; Simulate a new, empty tower, and drop the connection.
+        (transaction 'log-db
+          (execute "delete from refs")
+          (execute "delete from roots"))
+        (tower-client:disconnect)
+
+        (let ([wait-for-progress (capture-progress)])
+          ;; This request reconnects. The tower answers it before the
+          ;; re-index arrives.
+          (assert (null? (get-defns uri2 0 7)))
+          (wait-for-progress "enumerate-directories")
+          (for-each wait-for-test-sync uris))
+        (assert (equal? foo-defn (get-defns uri2 0 7)))
+        (for-each did-close uris)))))
+
 (isolate-mat uri-encoding ()
   (define (get-defns uri line0 char0)
     (map
