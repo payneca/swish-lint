@@ -25,6 +25,7 @@
   (export
    abs-path->uri
    tower-client:call
+   tower-client:disconnect
    tower-client:get-completions
    tower-client:get-definitions
    tower-client:get-local-references
@@ -123,23 +124,24 @@
      [else
       (string-append "file://" (percent-encode path))]))
 
-  (define (tower-client:start&link port-number)
+  ;; on-reconnect is called from inside the tower-client process after
+  ;; a lost connection is replaced. The tower may be new and empty, so
+  ;; the root directory has already been reset on the new connection;
+  ;; the caller should re-index.
+  (define (tower-client:start&link port-number on-reconnect)
     (define-state-tuple <tower-client>
       ws
       id
       id-map                            ; id -> from
-      sync-token
+      root-dir                          ; #f | directory last reset
       )
-    (define (try-connect state)
+    (define (try-connect)
       (match (try (ws:connect "localhost" port-number "/tower" self))
         [`(catch ,_) #f]
-        [,ws
-         (sync ws state)
-         ws]))
-    (define (do-connect state)
+        [,ws ws]))
+    (define (do-connect)
       (cond
-       [($state ws)]
-       [(try-connect state)]
+       [(try-connect)]
        [else
         ;; Explicitly generating the executable's name here. If this
         ;; code is running via Swish script, we want to make sure to
@@ -151,20 +153,35 @@
             (receive (after 200 'ok))
             (fprintf (trace-output-port) "Reconnecting...\n")
             (cond
-             [(try-connect state)]
+             [(try-connect)]
              [(< n 10) (lp (+ n 1))]
              [else (throw 'unable-to-connect)])))]))
-    (define (sync ws state)
+    (define (connect state)
       (cond
-       [($state sync-token) =>
-        (lambda (sync-token)
-          (ws:send ws
-            (json:object->bytevector
-             (json:make-object
-              [method "synchronize"]
-              [params
-               (json:make-object
-                [sync-token sync-token])]))))]))
+       [($state ws) state]
+       [else
+        (let ([ws (do-connect)])
+          (cond
+           [($state root-dir) =>
+            (lambda (dir)
+              ;; Without an id, the tower sends no reply.
+              (ws:send ws
+                (json:object->bytevector
+                 (json:make-object
+                  [method "reset-directory"]
+                  [params (json:make-object [directory dir])])))
+              (on-reconnect))])
+          ($state copy [ws ws]))]))
+    (define (disconnected state)
+      (ht:fold ($state id-map)
+        (lambda (k v acc)
+          (gen-server:reply v (make-fault 'disconnected))
+          acc)
+        (void))
+      ($state copy
+        [ws #f]
+        [id 0]
+        [id-map (ht:make values eq? fixnum?)]))
     (define (rpc-reply x)
       (cond
        [(json:ref x 'error #f) =>
@@ -180,33 +197,40 @@
                [ws #f]
                [id 0]
                [id-map (ht:make values eq? fixnum?)]
-               [sync-token #f])))
+               [root-dir #f])))
     (define (terminate reason state)
       (ws:close ($state ws)))
     (define (handle-call msg from state)
       (match msg
         [#(call ,msg)
-         (match (try (do-connect state))
+         (match (try (connect state))
            [`(catch ,reason ,err)
             `#(reply ,err ,state)]
-           [,ws
+           [,state
             (let ([id (+ ($state id) 1)])
               (json:set! msg 'id id)
-              (ws:send ws (json:object->bytevector msg))
+              (ws:send ($state ws) (json:object->bytevector msg))
               `#(no-reply
                  ,($state copy
-                    [ws ws]
                     [id id]
-                    [id-map (ht:set ($state id-map) id from)])))])]))
+                    [id-map (ht:set ($state id-map) id from)]
+                    [root-dir
+                     (if (equal? (json:ref msg 'method #f) "reset-directory")
+                         (json:ref msg '(params directory) #f)
+                         ($state root-dir))])))])]
+        [disconnect
+         (let ([ws ($state ws)])
+           (when ws (ws:close ws))
+           `#(reply ok ,(disconnected state)))]))
     (define (handle-cast msg state)
       (match msg
         [#(cast ,msg)
-         (match (try (do-connect state))
+         (match (try (connect state))
            [`(catch ,_)
             `#(no-reply ,state)]
-           [,ws
-            (ws:send ws (json:object->bytevector msg))
-            `#(no-reply ,($state copy [ws ws]))])]))
+           [,state
+            (ws:send ($state ws) (json:object->bytevector msg))
+            `#(no-reply ,state)])]))
     (define (handle-info msg state)
       (match msg
         [#(ws:message ,ws ,message)
@@ -215,17 +239,11 @@
                         (json:bytevector->object message))])
            (match (json:ref msg 'id #f)
              [#f
-              (match (json:ref msg 'method #f)
-                ["synchronize"
-                 `#(no-reply
-                    ,($state copy
-                       [sync-token (json:ref msg '(params sync-token) #f)]))]
-                [,_
-                 (fprintf (console-error-port) "Unhandled Tower event\n")
-                 (json:write (console-error-port) msg 0)
-                 (newline (console-error-port))
-                 (flush-output-port (console-error-port))
-                 `#(no-reply ,state)])]
+              (fprintf (console-error-port) "Unhandled Tower event\n")
+              (json:write (console-error-port) msg 0)
+              (newline (console-error-port))
+              (flush-output-port (console-error-port))
+              `#(no-reply ,state)]
              [,id
               (match (ht:ref ($state id-map) id #f)
                 [#f
@@ -242,24 +260,19 @@
                    `#(no-reply ,state))])]))]
         [#(ws:closed ,ws ,code ,reason)
          `#(no-reply
-            ,(cond
-              [(eq? ws ($state ws))
-               (ht:fold ($state id-map)
-                 (lambda (k v acc)
-                   (gen-server:reply v (make-fault 'disconnected))
-                   acc)
-                 (void))
-               ($state copy
-                 [ws #f]
-                 [id 0]
-                 [id-map (ht:make values eq? fixnum?)])]
-              [else state]))]
+            ,(if (eq? ws ($state ws))
+                 (disconnected state)
+                 state))]
         [#(ws:init ,ws)
          `#(no-reply ,state)]))
     (gen-server:start&link 'tower-client))
 
   (define (tower-client:call msg)
     (gen-server:call 'tower-client `#(call ,msg)))
+
+  ;; Drop the connection. The next call reconnects.
+  (define (tower-client:disconnect)
+    (gen-server:call 'tower-client 'disconnect))
 
   (define (tower-client:cast msg)
     (gen-server:cast 'tower-client `#(cast ,msg)))
