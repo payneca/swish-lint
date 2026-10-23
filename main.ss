@@ -121,7 +121,7 @@
        [(not (tower:running? tower-port-number))
         (tower:start-server verbose tower-db tower-port-number)]
        [verbose
-        (match-let* ([#(ok ,pid) (tower-client:start&link tower-port-number)])
+        (match-let* ([#(ok ,pid) (tower-client:start&link tower-port-number void)])
           (unlink pid)
           (tower-client:shutdown-server)
           (kill pid 'shutdown))
@@ -140,7 +140,7 @@
             (lambda (reason)
               (fprintf (console-error-port) "~a\n" (exit-reason->english reason))
               (flush-output-port (console-error-port))))])
-      (match-let* ([#(ok ,pid) (tower-client:start&link tower-port-number)])
+      (match-let* ([#(ok ,pid) (tower-client:start&link tower-port-number void)])
         (unlink pid)
         (tower-client:update-keywords keywords)))]
    [(and (opt 'indent) (not (null? files)))

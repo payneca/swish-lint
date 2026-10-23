@@ -682,7 +682,16 @@
              (let ([method (json:get msg 'method)]
                    [params (json:ref msg 'params #f)])
                `#(reply ok ,(do-handle-request id method params state)))]))]))
-    (define (handle-cast msg state) (match msg))
+    (define (handle-cast msg state)
+      (match msg
+        [tower-reconnected
+         ;; The tower may be new and empty. Index the project from disk,
+         ;; then re-check open documents so their buffer refs win.
+         `#(no-reply
+            ,(ht:fold ($state uri->doc)
+               (lambda (uri doc state)
+                 (set-worker uri (start-check uri doc #t) state))
+               (index-project state)))]))
     (define (handle-info msg state)
       (match msg
         [#(request-finished ,pid ,id ,result)
@@ -711,6 +720,31 @@
     ;; disk have only a worker, which opening the file cancels.
     (define (index-file uri progress state)
       (set-worker uri (start-update-refs uri progress) state))
+
+    (define (index-project state)
+      (cond
+       [($state root-dir) =>
+        (lambda (dir)
+          (let ([progress (make-progress "enumerate-directories"
+                            "Analyze files"
+                            (lambda (done total)
+                              (format "~a/~a files" done total)))])
+            (trace-time 'enumerate-directories
+              (let ([files (find-files dir)])
+                (cond
+                 [(null? files)
+                  ;; This is necessary for testing code that
+                  ;; depends on the progress events.
+                  (progress:inc-total progress)
+                  (progress:inc-done progress)
+                  state]
+                 [else
+                  (fold-left
+                   (lambda (state fn)
+                     (index-file (abs-path->uri fn) progress state))
+                   state
+                   files)])))))]
+       [else state]))
 
     (define (updated uri change version skip-delay? state)
       (let* ([old (ht:ref ($state uri->doc) uri #f)]
@@ -915,29 +949,8 @@
          (output-env)
          (config:load-user)
          (cond
-          [($state root-dir) =>
-           (lambda (dir)
-             (config:load-project dir)
-             (let ([progress (make-progress "enumerate-directories"
-                               "Analyze files"
-                               (lambda (done total)
-                                 (format "~a/~a files" done total)))])
-               (trace-time 'enumerate-directories
-                 (let ([files (find-files dir)])
-                   (cond
-                    [(null? files)
-                     ;; This is necessary for testing code that
-                     ;; depends on the progress events.
-                     (progress:inc-total progress)
-                     (progress:inc-done progress)
-                     state]
-                    [else
-                     (fold-left
-                      (lambda (state fn)
-                        (index-file (abs-path->uri fn) progress state))
-                      state
-                      files)])))))]
-          [else state])]
+          [($state root-dir) => config:load-project])
+         (index-project state)]
         ["textDocument/didOpen"
          (let ([doc (json:get params 'textDocument)])
            (updated (json:get doc 'uri) (json:get doc 'text)
@@ -995,7 +1008,9 @@
     `(#(tower-client
         ,(lambda ()
            (tower-client:start&link
-            (or port-number (http:get-port-number 'http))))
+            (or port-number (http:get-port-number 'http))
+            (lambda ()
+              (gen-server:cast 'lsp-server 'tower-reconnected))))
         permanent 1000 worker)
       #(tower-log
         ,(lambda ()
