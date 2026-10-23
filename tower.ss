@@ -48,26 +48,14 @@
           (cons (f i (car ls))
             (lp (+ i 1) (cdr ls))))))
 
+  ;; A request without an id is a notification and gets no response.
   (define (rpc:respond ws req result)
-    (let ([res (json:make-object [jsonrpc "2.0"])]
-          [id (json:ref req 'id #f)])
+    (let ([id (json:ref req 'id #f)])
       (when id
-        (json:extend-object res [id id]))
-      (when result
-        (json:extend-object res [result result]))
-      (ws:send ws (json:object->string res))))
-
-  (define (send-sync-event ws dir key)
-    (ws:send ws
-      (json:object->bytevector
-       (json:make-object
-        [method "synchronize"]
-        [params
-         (json:make-object
-          [sync-token
-           (json:make-object
-            [dir dir]
-            [key key])])]))))
+        (let ([res (json:make-object [jsonrpc "2.0"] [id id])])
+          (when result
+            (json:extend-object res [result result]))
+          (ws:send ws (json:object->string res))))))
 
   (define (scalar x)
     (match x
@@ -372,20 +360,7 @@ order by distance is null, distance asc, count desc, candidates.name asc"
                     pk]))])
          (root-dir dir)
          (root-key pk)
-         (send-sync-event ws dir pk)
          (rpc:respond ws msg "ok"))]
-      [synchronize
-       (let ([dir (json:get msg '(params sync-token dir))]
-             [key (json:get msg '(params sync-token key))])
-         (assert (not (root-dir)))
-         (assert (not (root-key)))
-         (root-dir dir)
-         (root-key key)
-         (do-log 1
-           (json:make-object
-            [_op_ "synchronize"]
-            [root-dir dir]
-            [root-key key])))]
       [update-keywords
        (let ([keywords (json:get msg '(params keywords))]
              [start (erlang:now)])
