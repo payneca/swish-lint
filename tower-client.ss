@@ -42,19 +42,69 @@
    (swish imports)
    )
 
+  (define (hex-value c)
+    (cond
+     [(not c) #f]
+     [(char<=? #\0 c #\9) (fx- (char->integer c) (char->integer #\0))]
+     [(char<=? #\A c #\F) (fx- (char->integer c) (fx- (char->integer #\A) 10))]
+     [(char<=? #\a c #\f) (fx- (char->integer c) (fx- (char->integer #\a) 10))]
+     [else #f]))
+
+  ;; Decode %XX sequences as UTF-8 bytes. A % that doesn't start a
+  ;; valid sequence is kept as is.
+  (define (percent-decode s)
+    (define n (string-length s))
+    (define (char-at i) (and (fx< i n) (string-ref s i)))
+    (let-values ([(op get) (open-bytevector-output-port)])
+      (let lp ([i 0])
+        (cond
+         [(fx= i n) (utf8->string (get))]
+         [(and (char=? (string-ref s i) #\%)
+               (hex-value (char-at (fx+ i 1)))
+               (hex-value (char-at (fx+ i 2))))
+          (put-u8 op (fx+ (fx* 16 (hex-value (char-at (fx+ i 1))))
+                          (hex-value (char-at (fx+ i 2)))))
+          (lp (fx+ i 3))]
+         [else
+          (put-bytevector op (string->utf8 (string (string-ref s i))))
+          (lp (fx+ i 1))]))))
+
+  ;; Keep RFC 3986 unreserved characters and the path separator, and
+  ;; encode every other UTF-8 byte as %XX.
+  (define (percent-encode path)
+    (define hex "0123456789ABCDEF")
+    (define (keep? b)
+      (let ([c (integer->char b)])
+        (or (char<=? #\A c #\Z)
+            (char<=? #\a c #\z)
+            (char<=? #\0 c #\9)
+            (memv c '(#\- #\. #\_ #\~ #\/)))))
+    (let ([bv (string->utf8 path)]
+          [op (open-output-string)])
+      (do ([i 0 (fx+ i 1)]) ((fx= i (bytevector-length bv)))
+        (let ([b (bytevector-u8-ref bv i)])
+          (cond
+           [(keep? b) (write-char (integer->char b) op)]
+           [else
+            (write-char #\% op)
+            (write-char (string-ref hex (fxsrl b 4)) op)
+            (write-char (string-ref hex (fxand b 15)) op)])))
+      (get-output-string op)))
+
   (define (uri->abs-path uri)
-    (match (pregexp-match (re "file://(.*)") uri)
+    (match (pregexp-match (re "^file://(.*)") uri)
       [(,_ ,filename)
-       (meta-cond
-        [windows?
-         (pregexp-replace* (re "\\\\")
-           (match (pregexp-match (re "/([A-Za-z])%3[Aa](.*)") filename)
-             [(,_ ,drive ,filename)
-              (string-append (string-upcase drive) ":" filename)]
-             [,_
-              filename])
-           "/")]
-        [else filename])]
+       (let ([filename (percent-decode filename)])
+         (meta-cond
+          [windows?
+           (pregexp-replace* (re "\\\\")
+             (match (pregexp-match (re "^/([A-Za-z]):(.*)") filename)
+               [(,_ ,drive ,filename)
+                (string-append (string-upcase drive) ":" filename)]
+               [,_
+                filename])
+             "/")]
+          [else filename]))]
       [,_ (throw `#(unhandled-uri ,uri))]))
 
   (define (abs-path->uri path)
@@ -64,14 +114,14 @@
         [#f
          ;; When testing it is useful to support Unix paths.
          (string-append "file://"
-           (pregexp-replace* (re "\\\\") path "/"))]
+           (percent-encode (pregexp-replace* (re "\\\\") path "/")))]
         [(,_ ,drive ,filename)
          (string-append "file:///"
            (string-downcase drive)
            "%3A"
-           (pregexp-replace* (re "\\\\") filename "/"))])]
+           (percent-encode (pregexp-replace* (re "\\\\") filename "/")))])]
      [else
-      (string-append "file://" path)]))
+      (string-append "file://" (percent-encode path))]))
 
   (define (tower-client:start&link port-number)
     (define-state-tuple <tower-client>
