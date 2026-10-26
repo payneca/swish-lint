@@ -31,6 +31,7 @@
  (testing pipe)
  (testing rpc)
  (tower)
+ (tower-client)
  )
 
 (software-info:install)
@@ -657,6 +658,28 @@
 
         (for-each did-close uris)
         'ok))))
+
+(isolate-mat uri-encoding ()
+  (define (get-defns uri line0 char0)
+    (map
+     (lambda (obj)
+       (list* (json:ref obj 'uri #f)
+         (extract-range (json:get obj 'range))))
+     (get-definitions uri line0 char0)))
+
+  (let ([rpc (start-lsp-server (get-real-path "."))])
+    (on-exit (stop-lsp-server rpc)
+      (define wait-for-test-sync (capture-test-sync))
+      (let* ([uri1 (abs-path->uri "/tmp/my proj/a #1 100% café.ss")]
+             [uri2 "file:///tmp/user.ss"])
+        (assert (not (memv #\space (string->list uri1))))
+        (did-open uri1 "(define foo 12)\n")
+        (did-open uri2 "(list foo)\n")
+        (for-each wait-for-test-sync (list uri1 uri2))
+        ;; The tower stores the decoded path, and the location comes
+        ;; back as the encoded URI.
+        (assert (equal? `((,uri1 from 0 8 to 0 11)) (get-defns uri2 0 7)))
+        (for-each did-close (list uri1 uri2))))))
 
 (isolate-mat diagnostics ()
   (define (extract-diagnostics ls)
