@@ -179,23 +179,37 @@
      (lambda ()
        (unless skip-delay?
          (receive (after 1000 'ok)))
-       (check uri doc skip-delay?)
-       (publish-diagnostics uri)
-       (unless skip-delay?
-         (receive (after 30000 'ok)))
-       (check-line-whitespace (doc:text doc) #t report)
-       (publish-diagnostics uri))))
+       (let ([updater (check uri doc skip-delay?)])
+         (publish-diagnostics uri)
+         (unless skip-delay?
+           (receive (after 30000 'ok)))
+         (check-line-whitespace (doc:text doc) #t report)
+         (publish-diagnostics uri)
+         ;; Wait for the reference update. It's linked to this worker,
+         ;; so replacing the worker, as closing the file does, then
+         ;; cancels it too, and a stale buffer can't overwrite the file's
+         ;; references.
+         (let ([m (monitor updater)])
+           (receive [`(DOWN ,@m ,_ ,_) 'ok]))))))
 
   (define (start-update-refs uri progress)
     (define pid
       (spawn
        (lambda ()
          (with-gatekeeper-mutex $update-refs 'infinity
+           ;; A missing file has no refs. A file that can't be read
+           ;; falls back to regular expressions, as check does.
            (let* ([filename (uri->abs-path uri)]
-                  [text (utf8->string (read-file filename))]
-                  [annotated-code (read-code text)]
-                  [source-table (make-code-lookup-table text)])
-             (do-update-refs uri text annotated-code source-table))))))
+                  [doc (string->doc
+                        (if (file-exists? filename)
+                            (utf8->string (read-file filename))
+                            "")
+                        #f)]
+                  [annotated-code (match (doc:read doc)
+                                    [`(catch ,_) #f]
+                                    [,code code])])
+             (do-update-refs uri (doc:text doc) annotated-code
+               (doc:source-table doc)))))))
     (when progress
       (progress:inc-total progress)
       (spawn
@@ -276,20 +290,23 @@
       [message (apply format fmt args)]
       [range (->lsp-range x)])))
 
+  ;; Returns the process that updates the file's references.
   (define (check uri doc skip-delay?)
     (define text (doc:text doc))
     (match (doc:read doc)
       [`(catch ,reason)
-       (let ([table (doc:source-table doc)])
-         (spawn-update-refs uri #f table text)
+       (let* ([table (doc:source-table doc)]
+              [updater (spawn-update-refs uri #f table text)])
          (let-values ([(line msg) (reason->line/msg reason table)])
-           (report line 'error msg)))]
+           (report line 'error msg))
+         updater)]
       [,annotated-code
-       (let ([source-table (doc:source-table doc)])
-         (spawn-update-refs uri annotated-code source-table text)
+       (let* ([source-table (doc:source-table doc)]
+              [updater (spawn-update-refs uri annotated-code source-table text)])
          (current-source-table source-table)
          (check-import/export annotated-code report)
-         (run-optional-checkers uri skip-delay? annotated-code text report))]))
+         (run-optional-checkers uri skip-delay? annotated-code text report)
+         updater)]))
 
   (define (do-update-refs uri text annotated-code source-table)
     (let ([filename (uri->abs-path uri)]
@@ -969,7 +986,12 @@
           #f
           #t
           state)]
-        ["textDocument/didClose" state]
+        ["textDocument/didClose"
+         ;; The editor has saved or discarded the buffer, so the file on
+         ;; disk is the truth. Index it so its refs stay findable.
+         (let ([uri (json:get params '(textDocument uri))])
+           (index-file uri #f
+             ($state copy* [uri->doc (ht:delete uri->doc uri)])))]
         ["workspace/didChangeConfiguration"
          (let* ([semtok-mode (json:ref params '(settings swish semtok-mode) #f)]
                 ;; Clients may send settings without our section, or
