@@ -694,6 +694,95 @@
         (assert (equal? foo-defn (get-defns uri2 0 7)))
         (for-each did-close uris)))))
 
+(isolate-mat did-close ()
+  (let ([rpc (start-lsp-server #f)])
+    (on-exit (stop-lsp-server rpc)
+      (let ([uri "file:///tmp/close.ss"])
+        (did-open uri (code "(let ()" "(f))" ""))
+        (match-let* ([(,_) (format-document uri)]) 'ok)
+        (did-close uri)
+        (match-let* ([() (format-document uri)]) 'ok)))))
+
+(isolate-mat did-close-cancels-buffer-refs ()
+  ;; Closing a file right after it's opened cancels the buffer's
+  ;; reference update, so it can't land after the re-index from disk.
+  (define (defined? uri line0 char0)
+    (pair? (get-definitions uri line0 char0)))
+  (let ([rpc (start-lsp-server (get-real-path "."))])
+    (on-exit (stop-lsp-server rpc)
+      (define wait-for-test-sync (capture-test-sync))
+      (define wait-for-diagnostics (capture-diagnostics))
+      (with-tmp-dir
+       (let* ([fn (path-combine (tmp-dir) "close-refs.ss")]
+              [uri1 (abs-path->uri fn)]
+              [uri2 "file:///tmp/user.ss"]
+              ;; The buffer is large, so its reference update takes a
+              ;; while, and it differs from the file on disk.
+              [buffer
+               (call-with-string-output-port
+                (lambda (op)
+                  (do ([i 0 (+ i 1)]) ((= i 5000))
+                    (fprintf op "(define (f~a x) (list x x x x x x x x x x))\n" i))
+                  (display "(define buffer-only 1)\n" op)))])
+         (let ([op (open-file-to-replace (make-directory-path fn))])
+           (on-exit (close-port op)
+             (display "(define disk-only 1)\n" op)))
+         (did-open uri2 "(list disk-only buffer-only)\n")
+         (wait-for-test-sync uri2)
+         (did-open uri1 buffer)
+         ;; didOpen publishes twice, and then its check worker is done.
+         (assert (wait-for-diagnostics uri1 10000))
+         (assert (wait-for-diagnostics uri1 10000))
+         (did-close uri1)
+         ;; Wait for the re-index from disk, and for a buffer update
+         ;; that wasn't cancelled.
+         (wait-for-test-sync uri1)
+         (receive (after 2000 'ok))
+         (assert (defined? uri2 0 7))
+         (assert (not (defined? uri2 0 17)))
+         (did-close uri2)
+         (delete-file fn))))))
+
+(isolate-mat did-close-reindex ()
+  (define (get-defns uri line0 char0)
+    (map
+     (lambda (obj)
+       (list* (json:ref obj 'uri #f)
+         (extract-range (json:get obj 'range))))
+     (get-definitions uri line0 char0)))
+
+  (let ([rpc (start-lsp-server (get-real-path "."))])
+    (on-exit (stop-lsp-server rpc)
+      (define wait-for-test-sync (capture-test-sync))
+      (with-tmp-dir
+       (let* ([fn (path-combine (tmp-dir) "close.ss")]
+              [uri1 (abs-path->uri fn)]
+              [uri2 "file:///tmp/missing.ss"]
+              [uri3 "file:///tmp/user.ss"])
+         (let ([op (open-file-to-replace (make-directory-path fn))])
+           (on-exit (close-port op)
+             (display "(define foo 12)\n" op)))
+         ;; The unsaved buffer defines bar instead of foo, and the
+         ;; buffer for uri2 has no file on disk.
+         (did-open uri1 "(define bar 12)\n")
+         (did-open uri2 "(define baz 12)\n")
+         (did-open uri3 "(list foo bar baz)\n")
+         (for-each wait-for-test-sync (list uri1 uri2 uri3))
+         (assert (null? (get-defns uri3 0 7)))
+         (assert (equal? `((,uri1 from 0 8 to 0 11)) (get-defns uri3 0 11)))
+         (assert (equal? `((,uri2 from 0 8 to 0 11)) (get-defns uri3 0 15)))
+
+         ;; Closing discards the buffers, and the files are indexed
+         ;; from disk.
+         (did-close uri1)
+         (did-close uri2)
+         (for-each wait-for-test-sync (list uri1 uri2))
+         (assert (equal? `((,uri1 from 0 8 to 0 11)) (get-defns uri3 0 7)))
+         (assert (null? (get-defns uri3 0 11)))
+         (assert (null? (get-defns uri3 0 15)))
+         (did-close uri3)
+         (delete-file fn))))))
+
 (isolate-mat uri-encoding ()
   (define (get-defns uri line0 char0)
     (map
@@ -705,16 +794,25 @@
   (let ([rpc (start-lsp-server (get-real-path "."))])
     (on-exit (stop-lsp-server rpc)
       (define wait-for-test-sync (capture-test-sync))
-      (let* ([uri1 (abs-path->uri "/tmp/my proj/a #1 100% café.ss")]
-             [uri2 "file:///tmp/user.ss"])
-        (assert (not (memv #\space (string->list uri1))))
-        (did-open uri1 "(define foo 12)\n")
-        (did-open uri2 "(list foo)\n")
-        (for-each wait-for-test-sync (list uri1 uri2))
-        ;; The tower stores the decoded path, and the location comes
-        ;; back as the encoded URI.
-        (assert (equal? `((,uri1 from 0 8 to 0 11)) (get-defns uri2 0 7)))
-        (for-each did-close (list uri1 uri2))))))
+      (with-tmp-dir
+       (let* ([fn (path-combine (tmp-dir) "my proj" "a #1 100% café.ss")]
+              [uri1 (abs-path->uri fn)]
+              [uri2 "file:///tmp/user.ss"])
+         (assert (not (memv #\space (string->list uri1))))
+         (let ([op (open-file-to-replace (make-directory-path fn))])
+           (on-exit (close-port op)
+             (display "(define foo 12)\n" op)))
+         ;; Closing the buffer indexes the file from disk, which reads
+         ;; the file through the decoded path.
+         (did-open uri1 "")
+         (did-open uri2 "(list foo)\n")
+         (for-each wait-for-test-sync (list uri1 uri2))
+         (did-close uri1)
+         (wait-for-test-sync uri1)
+         (assert (equal? `((,uri1 from 0 8 to 0 11)) (get-defns uri2 0 7)))
+         (did-close uri2)
+         (delete-file fn)
+         (delete-directory (path-parent fn)))))))
 
 (isolate-mat diagnostics ()
   (define (extract-diagnostics ls)
