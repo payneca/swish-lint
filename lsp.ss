@@ -1095,8 +1095,33 @@
 
     (gen-server:start&link 'lsp-server))
 
+  ;; A message that takes longer than this to handle stops the LSP. It
+  ;; means a handler is doing work that belongs in a worker.
   (define (lsp-server:incoming-message msg)
-    (gen-server:call 'lsp-server `#(incoming-message ,msg)))
+    (gen-server:call 'lsp-server `#(incoming-message ,msg) 5000))
+
+  ;; Crash reports go to the tower's log. Also summarize them on stderr,
+  ;; which the editor shows, so that a crash isn't silent.
+  (define (report-crash reason)
+    ;; msg has a method, an id, or both. handle-call fails at once on a
+    ;; message with neither, so it can't time out.
+    (define (describe msg)
+      (let ([method (json:ref msg 'method #f)]
+            [id (json:ref msg 'id #f)])
+        (cond
+         [(and method id) (format "~a (request ~s)" method id)]
+         [method method]
+         [else (format "the response to request ~s" id)])))
+    (fprintf (console-error-port) "swish-lint: ~a\n"
+      (match reason
+        [#(timeout #(gen-server call (lsp-server #(incoming-message ,msg) ,ms)))
+         (format "lsp-server took longer than ~a ms to handle ~a"
+           ms (describe msg))]
+        [,_
+         ;; The reason may hold a large message.
+         (parameterize ([print-level 4] [print-length 8])
+           (exit-reason->english reason))]))
+    (flush-output-port (console-error-port)))
 
   (define (lsp:sup-spec port-number ip op ignore-lhe?)
     `(#(tower-client
@@ -1112,6 +1137,14 @@
                    (lambda (e)
                      (match e
                        [(test-sync . ,_) #f]
+                       [`(<child-end> ,reason ,details)
+                        ;; When a process raises a condition, its
+                        ;; reason is exception and the condition is in
+                        ;; details.
+                        (unless (memq reason '(normal shutdown))
+                          (report-crash
+                           (if (eq? reason 'exception) details reason)))
+                        (tower-client:log (coerce e))]
                        [,_ (tower-client:log (coerce e))]))
                    (whereis 'tower-client))
              [ok
@@ -1157,3 +1190,64 @@
     (app:start)
     (receive))
   )
+
+#!eof mats
+
+(load-this-exposing '(report-crash))
+
+(import
+ (lsp)
+ (swish mat)
+ (swish testing)
+ )
+
+;; Returns what report-crash writes to stderr for reason.
+(define (crash-report reason)
+  (let ([os (open-output-string)])
+    (parameterize ([console-error-port os])
+      (report-crash reason))
+    (get-output-string os)))
+
+;; The reason the LSP stops with when handling msg takes too long.
+(define (timeout-reason msg)
+  `#(timeout #(gen-server call (lsp-server #(incoming-message ,msg) 5000))))
+
+(isolate-mat report-crash-timeout ()
+  ;; The message is named by its method and id, not printed whole.
+  (define (took-longer what)
+    (format "swish-lint: lsp-server took longer than 5000 ms to handle ~a\n"
+      what))
+  (assert
+   (equal? (took-longer "textDocument/hover (request 2)")
+     (crash-report
+      (timeout-reason
+       (json:make-object
+        [jsonrpc "2.0"]
+        [id 2]
+        [method "textDocument/hover"]
+        [params (json:make-object)])))))
+  (assert
+   (equal? (took-longer "textDocument/didChange")
+     (crash-report
+      (timeout-reason
+       (json:make-object
+        [jsonrpc "2.0"]
+        [method "textDocument/didChange"]
+        [params (json:make-object)])))))
+  (assert
+   (equal? (took-longer "the response to request \"abc\"")
+     (crash-report
+      (timeout-reason
+       (json:make-object [jsonrpc "2.0"] [id "abc"] [result #t]))))))
+
+(isolate-mat report-crash-other ()
+  ;; Other reasons are described by exit-reason->english, and a large
+  ;; one is abbreviated.
+  (match-let*
+   ([`(catch ,_ ,e) (try (vector-ref (vector) 0))])
+   (assert
+    (equal? "swish-lint: Exception in vector-ref: 0 is not a valid index for #().\n"
+      (crash-report e))))
+  (assert (equal? "swish-lint: some-reason\n" (crash-report 'some-reason)))
+  (assert
+   (equal? "swish-lint: (0 1 2 3 4 5 6 7 ...)\n" (crash-report (iota 100)))))
