@@ -168,28 +168,31 @@
     (define (build-token type value bfp efp err props)
       (and (in-range? bfp efp)
            (make-token type (token-type-indexer type) value (substring text bfp efp) bfp efp err props)))
-    (define (as-token str start end err)
+    (define (lblock-comment? i end)
+      (and (fx< (fx+ i 1) end)
+           (eq? (string-ref text i) #\#)
+           (eq? (string-ref text (fx+ i 1)) #\|)))
+    (define (rblock-comment? i end)
+      (and (fx< (fx+ i 1) end)
+           (eq? (string-ref text i) #\|)
+           (eq? (string-ref text (fx+ i 1)) #\#)))
+    (define (as-token start end err)
       (and
        (fx< start end)
-       (let ([first (string-ref str start)]
-             [at-least-two? (> (- end start) 1)])
+       (let ([first (string-ref text start)])
          (cond
           [(eq? first #\newline)
            (build-token 'eol #f start end err empty-props)]
           [(char-whitespace? first)
            (build-token 'ws (- end start) start end err empty-props)]
           [(eq? first #\;)
-           (build-token* 'line-comment (substring str start end) start end err (token-prop comment line-comment))]
-          [(and at-least-two?
-                (eq? first #\#)
-                (eq? (string-ref str (fx+ start 1)) #\|))
+           (build-token* 'line-comment (substring text start end) start end err (token-prop comment line-comment))]
+          [(lblock-comment? start end)
            (build-token 'lblock-comment #f start end err empty-props)]
-          [(and at-least-two?
-                (eq? first #\|)
-                (eq? (string-ref str (fx+ start 1)) #\#))
+          [(rblock-comment? start end)
            (build-token 'rblock-comment #f start end err empty-props)]
           [else
-           (build-token* 'text (substring str start end) start end err empty-props)]))))
+           (build-token* 'text (substring text start end) start end err empty-props)]))))
     (define (gen-ext-tokens start end err)
       (when (and (fx< start end)
                  (<= line-number end-line))
@@ -214,20 +217,12 @@
                 (gen-ext-tokens next end err)]
                [else
                 (lp (fx+ next 1))]))]
-           [(and (eq? c #\#)            ; lblock-comment
-                 (let ([next (fx+ start 1)])
-                   (and (fx< next end)
-                        (eq? (string-ref text next) #\|)
-                        (fx+ next 1)))) =>
-            (lambda (next)
+           [(lblock-comment? start end)
+            (let ([next (fx+ start 2)])
               (yield+ (build-token 'lblock-comment #f start next err empty-props))
-              (gen-ext-tokens next end err))]
-           [(and (eq? c #\|)            ; rblock-comment
-                 (let ([next (fx+ start 1)])
-                   (and (fx< next end)
-                        (eq? (string-ref text next) #\#)
-                        (fx+ next 1)))) =>
-            (lambda (next)
+              (gen-block-comment-tokens next end err 1))]
+           [(rblock-comment? start end)
+            (let ([next (fx+ start 2)])
               (yield+ (build-token 'rblock-comment #f start next err empty-props))
               (gen-ext-tokens next end err))]
            [(char-whitespace? c) ; contiguous whitespace, not newlines
@@ -245,14 +240,57 @@
             (match (pregexp-match-positions my-regexp text start end)
               [((,bfp . ,efp))
                ;; Something occurred before the regexp
-               (cond [(as-token text start bfp err) => yield+])
+               (cond [(as-token start bfp err) => yield+])
                ;; Regexp found something
-               (cond [(as-token text bfp efp err) => yield+])
+               (cond [(as-token bfp efp err) => yield+])
                (gen-ext-tokens efp end err)]
               [,_
                ;; Something occurred that was not processed by read-token,
                ;; and was not caught by the regular expressions.
-               (cond [(as-token text start end err) => yield+])])]))))
+               (cond [(as-token start end err) => yield+])])]))))
+    (define (gen-block-comment-tokens start end err depth)
+      ;; Inside a block comment, only #| and |# matter. In particular,
+      ;; a ; doesn't start a line comment that would hide the |#.
+      (cond
+       [(fx= depth 0) (gen-ext-tokens start end err)]
+       [(and (fx< start end)
+             (<= line-number end-line))
+        (let ([c (string-ref text start)])
+          (cond
+           [(eq? c #\newline)
+            (let ([next (fx+ start 1)])
+              (yield+ (build-token 'eol #f start next err empty-props))
+              (gen-block-comment-tokens next end err depth))]
+           [(lblock-comment? start end)
+            (let ([next (fx+ start 2)])
+              (yield+ (build-token 'lblock-comment #f start next err empty-props))
+              (gen-block-comment-tokens next end err (fx+ depth 1)))]
+           [(rblock-comment? start end)
+            (let ([next (fx+ start 2)])
+              (yield+ (build-token 'rblock-comment #f start next err empty-props))
+              (gen-block-comment-tokens next end err (fx- depth 1)))]
+           [(char-whitespace? c) ; contiguous whitespace, not newlines
+            (let lp ([next (fx+ start 1)])
+              (cond
+               [(or (fx>= next end)
+                    (let ([c2 (string-ref text next)])
+                      (or (eq? c2 #\newline)
+                          (not (char-whitespace? c2)))))
+                (yield+ (build-token 'ws (fx- next start) start next err empty-props))
+                (gen-block-comment-tokens next end err depth)]
+               [else
+                (lp (fx+ next 1))]))]
+           [else
+            (let lp ([next (fx+ start 1)])
+              (cond
+               [(or (fx>= next end)
+                    (char-whitespace? (string-ref text next))
+                    (lblock-comment? next end)
+                    (rblock-comment? next end))
+                (yield+ (build-token* 'text (substring text start next) start next err empty-props))
+                (gen-block-comment-tokens next end err depth)]
+               [else
+                (lp (fx+ next 1))]))]))]))
     (define (gen-tokens)
       (let ([ip (open-input-string text)]
             [end (string-length text)])
