@@ -55,15 +55,20 @@
                [message (json:ref value 'message #f)]
                [percentage (json:ref value 'percentage #f)]))))
     self)
-  (lambda (token)
-    (receive
-     [`(<progress> ,@token [kind "begin"] ,percentage)
-      (let lp ([prior percentage])
-        (receive
-         [`(<progress> ,@token [kind "end"]) 'ok]
-         [`(<progress> ,@token [kind "report"] ,percentage)
-          (assert (>= percentage prior))
-          (lp percentage)]))])))
+  ;; Returns #f if progress doesn't begin within timeout.
+  (letrec ([wait
+            (case-lambda
+             [(token) (wait token 'infinity)]
+             [(token timeout)
+              (receive (after timeout #f)
+                [`(<progress> ,@token [kind "begin"] ,percentage)
+                 (let lp ([prior percentage])
+                   (receive
+                    [`(<progress> ,@token [kind "end"]) 'ok]
+                    [`(<progress> ,@token [kind "report"] ,percentage)
+                     (assert (>= percentage prior))
+                     (lp percentage)]))])])])
+    wait))
 
 (define (capture-test-sync)
   (let ([me self])
@@ -93,6 +98,11 @@
       [`(<diagnostics> ,@uri ,diagnostics) diagnostics])))
 
 (define (start-lsp-server path)
+  (start-lsp-server* path #t))
+
+;; Unless wait? is true, return without waiting for the project to be
+;; indexed.
+(define (start-lsp-server* path wait?)
   (define-values (ip1 op1) (make-pipe "pipe1"))
   (define-values (ip2 op2) (make-pipe "pipe2"))
   (define-values (tip top) (make-pipe "trace pipe"))
@@ -142,6 +152,7 @@
       [method "initialized"]
       [params (json:make-object)]))
    (cond
+    [(not wait?) 'ok]
     [path
      (wait-for-progress "enumerate-directories")]
     [else
@@ -782,6 +793,91 @@
          (assert (null? (get-defns uri3 0 15)))
          (did-close uri3)
          (delete-file fn))))))
+
+(define (write-text fn text)
+  (let ([op (open-file-to-replace (make-directory-path fn))])
+    (on-exit (close-port op)
+      (display text op))))
+
+(isolate-mat slow-enumeration ()
+  (define (get-defns uri line0 char0)
+    (map
+     (lambda (obj)
+       (list* (json:ref obj 'uri #f)
+         (extract-range (json:get obj 'range))))
+     (get-definitions uri line0 char0)))
+
+  (with-tmp-dir
+   (let* ([script (path-combine (tmp-dir) "find-files")]
+          [fn1 (path-combine (tmp-dir) "file1.ss")]
+          [fn2 (path-combine (tmp-dir) "file2.ss")]
+          [uri1 (abs-path->uri fn1)]
+          [uri2 (abs-path->uri fn2)]
+          [uri3 "file:///tmp/user.ss"])
+     (write-text fn1 "(define foo 12)\n")
+     (write-text fn2 "(define bar 12)\n")
+     ;; Take longer than the gen-server:call timeout.
+     (write-script script
+       '((receive (after 6000 'ok))
+         (display "file1.ss\nfile2.ss\n")))
+     (parameterize ([config:find-files (script-command script)])
+       (let ([rpc (start-lsp-server* (tmp-dir) #f)]
+             [start (erlang:now)])
+         (on-exit (stop-lsp-server rpc)
+           (define wait-for-progress (capture-progress))
+           (define wait-for-test-sync (capture-test-sync))
+           ;; The server answers while the project is enumerated. The
+           ;; unsaved buffer defines baz instead of bar.
+           (did-open uri2 "(define baz 12)\n")
+           (did-open uri3 "(list foo bar baz)\n")
+           (for-each wait-for-test-sync (list uri2 uri3))
+           (assert (equal? `((,uri2 from 0 8 to 0 11)) (get-defns uri3 0 15)))
+           (assert (< (- (erlang:now) start) 5000))
+
+           ;; The enumeration skips the open buffer.
+           (wait-for-progress "enumerate-directories")
+           (wait-for-test-sync uri1)
+           (assert (equal? `((,uri1 from 0 8 to 0 11)) (get-defns uri3 0 7)))
+           (assert (null? (get-defns uri3 0 11)))
+           (assert (equal? `((,uri2 from 0 8 to 0 11)) (get-defns uri3 0 15)))
+           (did-close uri2)
+           (did-close uri3)
+           (wait-for-test-sync uri2))))
+     (for-each delete-file (list script fn1 fn2)))))
+
+(isolate-mat reconnect-during-enumeration ()
+  (define (get-defns uri line0 char0)
+    (map
+     (lambda (obj)
+       (list* (json:ref obj 'uri #f)
+         (extract-range (json:get obj 'range))))
+     (get-definitions uri line0 char0)))
+
+  (with-tmp-dir
+   (let* ([script (path-combine (tmp-dir) "find-files")]
+          [fn1 (path-combine (tmp-dir) "file1.ss")]
+          [uri1 (abs-path->uri fn1)]
+          [uri2 "file:///tmp/user.ss"])
+     (write-text fn1 "(define foo 12)\n")
+     (write-script script
+       '((receive (after 2000 'ok))
+         (display "file1.ss\n")))
+     (parameterize ([config:find-files (script-command script)])
+       (let ([rpc (start-lsp-server* (tmp-dir) #f)])
+         (on-exit (stop-lsp-server rpc)
+           (define wait-for-progress (capture-progress))
+           (define wait-for-test-sync (capture-test-sync))
+           ;; Opening a file reconnects, which starts a new enumeration
+           ;; and cancels the first.
+           (tower-client:disconnect)
+           (did-open uri2 "(list foo)\n")
+           (wait-for-test-sync uri2)
+           (wait-for-progress "enumerate-directories")
+           (assert (not (wait-for-progress "enumerate-directories" 1000)))
+           (wait-for-test-sync uri1)
+           (assert (equal? `((,uri1 from 0 8 to 0 11)) (get-defns uri2 0 7)))
+           (did-close uri2))))
+     (for-each delete-file (list script fn1)))))
 
 (isolate-mat uri-encoding ()
   (define (get-defns uri line0 char0)
