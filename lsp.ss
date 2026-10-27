@@ -657,6 +657,7 @@
       pid->req
       uri->doc
       uri->worker
+      indexer                           ; #f | project enumerator
       client-cap
       requests
       semtok-mode
@@ -672,6 +673,7 @@
                [pid->req (ht:make process-id eq? process?)]
                [uri->doc (ht:make string-hash string=? string?)]
                [uri->worker (ht:make string-hash string=? string?)]
+               [indexer #f]
                [client-cap #f]
                [requests (ht:make string-hash string=? string?)]
                [semtok-mode 'full]
@@ -702,24 +704,35 @@
     (define (handle-cast msg state)
       (match msg
         [tower-reconnected
-         ;; The tower may be new and empty. Index the project from disk,
-         ;; then re-check open documents so their buffer refs win.
+         ;; The tower may be new and empty. Re-check open documents,
+         ;; and index the rest of the project from disk.
          `#(no-reply
-            ,(ht:fold ($state uri->doc)
-               (lambda (uri doc state)
-                 (set-worker uri (start-check uri doc #t) state))
-               (index-project state)))]))
+            ,(index-project
+              (ht:fold ($state uri->doc)
+                (lambda (uri doc state)
+                  (set-worker uri (start-check uri doc #t) state))
+                state)))]))
     (define (handle-info msg state)
       (match msg
         [#(request-finished ,pid ,id ,result)
          (rpc:respond id result)
          `#(no-reply ,(delete-req id pid state))]
+        [#(project-files ,pid ,files)
+         ;; A cancelled enumerator may have sent its files before it
+         ;; was killed.
+         `#(no-reply
+            ,(if (eq? pid ($state indexer))
+                 (index-files files ($state copy [indexer #f]))
+                 state))]
         [`(DOWN ,_ ,pid ,reason)
          (cond
           [(ht:ref ($state pid->req) pid #f) =>
            (lambda (id)
              (rpc:respond-error id -32000 reason)
              `#(no-reply ,(delete-req id pid state)))]
+          [(eq? pid ($state indexer))
+           (trace-expr `(index-project => ,(exit-reason->english reason)))
+           `#(no-reply ,($state copy [indexer #f]))]
           [else
            `#(no-reply ,state)])]))
 
@@ -738,30 +751,50 @@
     (define (index-file uri progress state)
       (set-worker uri (start-update-refs uri progress) state))
 
+    ;; Enumerating the project can take a long time, so it runs in its
+    ;; own process and sends the files back. Starting a new enumeration
+    ;; cancels the old one.
     (define (index-project state)
       (cond
        [($state root-dir) =>
         (lambda (dir)
-          (let ([progress (make-progress "enumerate-directories"
-                            "Analyze files"
-                            (lambda (done total)
-                              (format "~a/~a files" done total)))])
-            (trace-time 'enumerate-directories
-              (let ([files (find-files dir)])
-                (cond
-                 [(null? files)
-                  ;; This is necessary for testing code that
-                  ;; depends on the progress events.
-                  (progress:inc-total progress)
-                  (progress:inc-done progress)
-                  state]
-                 [else
-                  (fold-left
-                   (lambda (state fn)
-                     (index-file (abs-path->uri fn) progress state))
-                   state
-                   files)])))))]
+          (let ([old ($state indexer)])
+            (when old (kill old 'cancelled)))
+          (let* ([me self]
+                 [pid (spawn
+                       (lambda ()
+                         (let ([files (trace-time 'enumerate-directories
+                                        (find-files dir))])
+                           (send me `#(project-files ,self ,files)))))])
+            (monitor pid)
+            ($state copy [indexer pid])))]
        [else state]))
+
+    ;; An open document's check worker indexes its buffer, which wins
+    ;; over the file on disk.
+    (define (open-doc? uri state)
+      (ht:ref ($state uri->doc) uri #f))
+
+    (define (index-files files state)
+      (let ([progress (make-progress "enumerate-directories"
+                        "Analyze files"
+                        (lambda (done total)
+                          (format "~a/~a files" done total)))]
+            [uris (filter (lambda (uri) (not (open-doc? uri state)))
+                    (map abs-path->uri files))])
+        (cond
+         [(null? uris)
+          ;; This is necessary for testing code that
+          ;; depends on the progress events.
+          (progress:inc-total progress)
+          (progress:inc-done progress)
+          state]
+         [else
+          (fold-left
+           (lambda (state uri)
+             (index-file uri progress state))
+           state
+           uris)])))
 
     (define (updated uri change version skip-delay? state)
       (let* ([old (ht:ref ($state uri->doc) uri #f)]

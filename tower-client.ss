@@ -213,11 +213,7 @@
               `#(no-reply
                  ,($state copy
                     [id id]
-                    [id-map (ht:set ($state id-map) id from)]
-                    [root-dir
-                     (if (equal? (json:ref msg 'method #f) "reset-directory")
-                         (json:ref msg '(params directory) #f)
-                         ($state root-dir))])))])]
+                    [id-map (ht:set ($state id-map) id from)])))])]
         [disconnect
          (let ([ws ($state ws)])
            (when ws (ws:close ws))
@@ -230,7 +226,21 @@
             `#(no-reply ,state)]
            [,state
             (ws:send ($state ws) (json:object->bytevector msg))
-            `#(no-reply ,state)])]))
+            `#(no-reply ,state)])]
+        [#(reset-directory ,dir)
+         ;; Keep dir even if the tower can't be reached. The next
+         ;; connection resets it and calls on-reconnect.
+         (match (try (connect state))
+           [`(catch ,_)
+            `#(no-reply ,($state copy [root-dir dir]))]
+           [,state
+            ;; Without an id, the tower sends no reply.
+            (ws:send ($state ws)
+              (json:object->bytevector
+               (json:make-object
+                [method "reset-directory"]
+                [params (json:make-object [directory dir])])))
+            `#(no-reply ,($state copy [root-dir dir]))])]))
     (define (handle-info msg state)
       (match msg
         [#(ws:message ,ws ,message)
@@ -327,13 +337,10 @@
         [timestamp (erlang:now)]
         [message msg])])))
 
+  ;; A cast, so that initialize doesn't wait for the tower to start.
+  ;; Later calls queue behind it, so the tower sees the reset first.
   (define (tower-client:reset-directory dir)
-    (tower-client:call
-     (json:make-object
-      [method "reset-directory"]
-      [params
-       (json:make-object
-        [directory dir])])))
+    (gen-server:cast 'tower-client `#(reset-directory ,dir)))
 
   (define (tower-client:update-keywords keywords)
     ;; Keywords is a list of JSON objects containing: keyword, meta
