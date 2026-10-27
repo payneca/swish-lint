@@ -879,6 +879,137 @@
            (did-close uri2))))
      (for-each delete-file (list script fn1)))))
 
+(define-environment-parameters GIT_CEILING_DIRECTORIES)
+
+;; git makes its object files read-only, and Windows won't delete a
+;; read-only file. Unlike delete-tree, this fails if a delete fails.
+(define (force-delete-tree path)
+  (cond
+   [(file-directory? path)
+    (for-each (lambda (fn) (force-delete-tree (path-combine path fn)))
+      (directory-list path))
+    (delete-directory path #t)]
+   [else
+    (set-file-mode path #o666)
+    (delete-file path #t)]))
+
+;; Indexes a project of tracked, untracked and ignored files, using the
+;; find-files command that (cmd) returns. Returns the names whose
+;; definitions were indexed.
+(define (find-files-indexes cmd git?)
+  (define uri "file:///tmp/user.ss")
+  (define (git . args)
+    (match-let*
+     ([0 (system (format "git -C ~s~{ ~a~}" (tmp-dir) args))])
+     'ok))
+  (define (indexed)
+    (parameterize ([config:find-files (cmd)])
+      (let ([rpc (start-lsp-server (tmp-dir))])
+        (on-exit (stop-lsp-server rpc)
+          (define wait-for-test-sync (capture-test-sync))
+          (did-open uri "(list tracked untracked ignored)\n")
+          (wait-for-test-sync uri)
+          (let ([found
+                 (filter
+                  (lambda (name+char)
+                    (pair? (get-definitions uri 0 (cdr name+char))))
+                  '((tracked . 7) (untracked . 15) (ignored . 25)))])
+            (did-close uri)
+            (map car found))))))
+  (with-tmp-dir
+   (write-text (path-combine (tmp-dir) "tracked.ss") "(define tracked 1)\n")
+   (write-text (path-combine (tmp-dir) "untracked.ss") "(define untracked 1)\n")
+   (write-text (path-combine (tmp-dir) "ignored.ss") "(define ignored 1)\n")
+   (write-text (path-combine (tmp-dir) ".gitignore") "ignored.ss\n")
+   (when git?
+     (git "init" "-q")
+     (git "add" "tracked.ss"))
+   ;; Keep git from finding the swish-lint repository.
+   (GIT_CEILING_DIRECTORIES (path-parent (tmp-dir)))
+   (let ([found (on-exit (GIT_CEILING_DIRECTORIES "") (indexed))])
+     (for-each (lambda (fn) (force-delete-tree (path-combine (tmp-dir) fn)))
+       (directory-list (tmp-dir)))
+     found)))
+
+(define (failing-command)
+  (let ([fn (path-combine (tmp-dir) "fail")])
+    (write-script fn '((exit 1)))
+    (script-command fn)))
+
+(isolate-mat find-files-walk ()
+  ;; The command fails, and so does git outside a repository, so the
+  ;; directories are walked.
+  (match-let*
+   ([(tracked untracked ignored) (find-files-indexes failing-command #f)])
+   'ok))
+
+(isolate-mat find-files-git ()
+  ;; git lists tracked and untracked files, but not ignored ones.
+  (match-let*
+   ([(tracked untracked) (find-files-indexes failing-command #t)])
+   'ok))
+
+(isolate-mat find-files-timeout ()
+  ;; A command that produces no output within the timeout is killed,
+  ;; and the directories are walked. If it ran to completion instead,
+  ;; it would list no files.
+  (with-tmp-dir
+   (let ([fn (path-combine (tmp-dir) "slow")])
+     (write-script fn '((receive (after 5000 'ok))))
+     ;; Keep git from finding the swish-lint repository.
+     (GIT_CEILING_DIRECTORIES (path-parent (tmp-dir)))
+     (on-exit (GIT_CEILING_DIRECTORIES "")
+       (parameterize ([config:find-files (script-command fn)])
+         (let-values ([(who files) (lsp:find-files (tmp-dir) 500)])
+           (assert (eq? who 'directory-walk))
+           (assert (equal? files (list fn))))))
+     (delete-file fn))))
+
+(isolate-mat find-files-stops-its-processes ()
+  ;; Once find-files returns, nothing it started for a command is still
+  ;; running. A watcher left behind would send SIGTERM to the command's
+  ;; pid if the caller were killed later, when another process may have
+  ;; that pid.
+  (define (process-count)
+    ;; The process table is weak, so collect what has exited.
+    (collect (collect-maximum-generation))
+    (ps-fold-left < 0 (lambda (n p) (+ n 1))))
+  (with-tmp-dir
+   ;; Keep git from finding the swish-lint repository.
+   (GIT_CEILING_DIRECTORIES (path-parent (tmp-dir)))
+   (on-exit (GIT_CEILING_DIRECTORIES "")
+     (parameterize ([config:find-files (failing-command)])
+       (let ([before (process-count)])
+         ;; The command fails, and so does git outside a repository.
+         (let-values ([(who files) (lsp:find-files (tmp-dir))])
+           (assert (eq? who 'directory-walk)))
+         (let lp ([tries 0])
+           (let ([extra (- (process-count) before)])
+             (cond
+              [(<= extra 0) 'ok]
+              [(< tries 100) (receive (after 10 (lp (+ tries 1))))]
+              [else (throw `#(still-running ,extra))]))))))
+   (delete-file (path-combine (tmp-dir) "fail"))))
+
+(isolate-mat find-files-cancelled ()
+  ;; Killing the caller stops the command it's waiting for.
+  (with-tmp-dir
+   (let ([fn (path-combine (tmp-dir) "slow")]
+         [marker (path-combine (tmp-dir) "finished")])
+     (write-script fn
+       `((receive (after 2000 'ok))
+         (close-port (open-file-to-replace ,marker))))
+     ;; Killing the caller would skip parameterize's restore, so set
+     ;; the global parameter here.
+     (let ([saved (config:find-files)])
+       (config:find-files (script-command fn))
+       (on-exit (config:find-files saved)
+         (let ([pid (spawn (lambda () (lsp:find-files (tmp-dir) 10000)))])
+           (receive (after 500 (kill pid 'cancelled)))
+           (receive (after 3000 'ok))
+           (assert (not (file-exists? marker))))))
+     (delete-file fn))))
+
 (isolate-mat uri-encoding ()
   (define (get-defns uri line0 char0)
     (map
