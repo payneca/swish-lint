@@ -221,7 +221,7 @@
                         (fx+ next 1)))) =>
             (lambda (next)
               (yield+ (build-token 'lblock-comment #f start next err empty-props))
-              (gen-ext-tokens next end err))]
+              (gen-block-comment-tokens next end err 1))]
            [(and (eq? c #\|)            ; rblock-comment
                  (let ([next (fx+ start 1)])
                    (and (fx< next end)
@@ -253,6 +253,55 @@
                ;; Something occurred that was not processed by read-token,
                ;; and was not caught by the regular expressions.
                (cond [(as-token text start end err) => yield+])])]))))
+    (define (gen-block-comment-tokens start end err depth)
+      ;; Inside a block comment, only #| and |# matter. In particular,
+      ;; a ; doesn't start a line comment that would hide the |#.
+      (define (block-delim? i)
+        (and (fx< (fx+ i 1) end)
+             (let ([c (string-ref text i)]
+                   [c2 (string-ref text (fx+ i 1))])
+               (or (and (eq? c #\#) (eq? c2 #\|))
+                   (and (eq? c #\|) (eq? c2 #\#))))))
+      (cond
+       [(fx= depth 0) (gen-ext-tokens start end err)]
+       [(and (fx< start end)
+             (<= line-number end-line))
+        (let ([c (string-ref text start)])
+          (cond
+           [(eq? c #\newline)
+            (let ([next (fx+ start 1)])
+              (yield+ (build-token 'eol #f start next err empty-props))
+              (gen-block-comment-tokens next end err depth))]
+           [(block-delim? start)
+            (let ([next (fx+ start 2)])
+              (cond
+               [(eq? c #\#)
+                (yield+ (build-token 'lblock-comment #f start next err empty-props))
+                (gen-block-comment-tokens next end err (fx+ depth 1))]
+               [else
+                (yield+ (build-token 'rblock-comment #f start next err empty-props))
+                (gen-block-comment-tokens next end err (fx- depth 1))]))]
+           [(char-whitespace? c) ; contiguous whitespace, not newlines
+            (let lp ([next (fx+ start 1)])
+              (cond
+               [(or (fx>= next end)
+                    (let ([c2 (string-ref text next)])
+                      (or (eq? c2 #\newline)
+                          (not (char-whitespace? c2)))))
+                (yield+ (build-token 'ws (fx- next start) start next err empty-props))
+                (gen-block-comment-tokens next end err depth)]
+               [else
+                (lp (fx+ next 1))]))]
+           [else
+            (let lp ([next (fx+ start 1)])
+              (cond
+               [(or (fx>= next end)
+                    (char-whitespace? (string-ref text next))
+                    (block-delim? next))
+                (yield+ (build-token* 'text (substring text start next) start next err empty-props))
+                (gen-block-comment-tokens next end err depth)]
+               [else
+                (lp (fx+ next 1))]))]))]))
     (define (gen-tokens)
       (let ([ip (open-input-string text)]
             [end (string-length text)])
