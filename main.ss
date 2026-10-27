@@ -109,6 +109,17 @@
           (config:load-project repo)]
          [else
           (printf "No repository found\n")])))
+    (newline)
+    (let ([start (erlang:now)])
+      (let-values ([(who files) (lsp:find-files (cd))])
+        (printf "Project files: ~a found by ~a in ~a ms\n"
+          (length files)
+          (match who
+            [find-files
+             (format "the find-files command ~s" (config:find-files))]
+            [git "git ls-files"]
+            [directory-walk "walking the directories"])
+          (- (erlang:now) start))))
     (exit 0)]
    [(opt 'lsp)
     (config-output-port (console-error-port))

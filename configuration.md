@@ -12,7 +12,13 @@ For consistent results at the command-line and on build systems, user-level conf
 
 ### `(find-files cmd . args)`
 
-By default, Swish-Lint recursively searches through a project's directories seeking `*.ss` and `*.ms` files while ignoring `.git` directories. However, it can be advantageous to customize this behavior to utilizing an external program like `git`, as demonstrated below:
+Swish-Lint indexes a project's `*.ss` and `*.ms` files, and other files whose first line is a `swish`, `scheme`, or `petite` script line. It finds them with the first of these that succeeds:
+
+1. The `find-files` command, if configured. It runs in the project's root directory and prints one file name per line, relative to that directory.
+2. `git ls-files --cached --others --exclude-standard`, which lists tracked and untracked files but not ignored ones.
+3. A recursive search of the project's directories that skips `.git` directories and nested repositories.
+
+A command fails if it can't be started, exits with a nonzero status, or produces no output for 10 seconds. For example, to index only tracked files:
 
 ```scheme
 (find-files "git" "ls-files" "--" "*.ss" "*.ms")
