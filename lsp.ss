@@ -23,6 +23,7 @@
 #!chezscheme
 (library (lsp)
   (export
+   lsp:find-files
    lsp:read-loop
    lsp:start-server
    lsp:sup-spec
@@ -600,20 +601,50 @@
                             (pregexp-match (re "swish|scheme|petite") line)
                             #t)))))))))
 
-  (define (find-files-external ff path)
-    (trace-expr `(find-files-external ,ff ,path))
+  (define (get-nul-terminated ip)
+    (let ([c (get-char ip)])
+      (if (eof-object? c)
+          c
+          (let-values ([(op get) (open-string-output-port)])
+            (let lp ([c c])
+              (cond
+               [(or (eof-object? c) (char=? c #\nul)) (get)]
+               [else
+                (write-char c op)
+                (lp (get-char ip))]))))))
+
+  ;; Returns the files that cmd lists, one per get-name record, or #f
+  ;; if cmd can't be started, fails, or produces no output for timeout
+  ;; ms. Unless quiet? is true, cmd's stderr is shown even when not
+  ;; tracing.
+  (define (find-files-external cmd path get-name timeout quiet?)
+    (trace-expr `(find-files-external ,cmd ,path))
     (call-with-values
      (lambda ()
        (try (parameterize ([cd path])
-              (spawn-os-process (car ff) (cdr ff) (spawn values)))))
+              (spawn-os-process (car cmd) (cdr cmd) self))))
      (case-lambda
       [(fault)
        (trace-expr `(find-files => ,(exit-reason->english fault)))
-       '()]
+       #f]
       [(to-stdin from-stdout from-stderr os-pid)
-       (let ([to-stdin (binary->utf8 to-stdin)]
+       (let ([me self]
+             [to-stdin (binary->utf8 to-stdin)]
              [from-stdout (binary->utf8 from-stdout)]
              [from-stderr (binary->utf8 from-stderr)])
+         (define (stop-command reason)
+           (trace-expr `(find-files => ,reason))
+           (osi_kill* os-pid 15)
+           #f)
+         ;; kill doesn't run on-exit, so another process stops the
+         ;; command if this one is cancelled.
+         (spawn
+          (lambda ()
+            (let ([m (monitor me)])
+              (receive
+               [`(DOWN ,@m ,_ ,reason)
+                (unless (eq? reason 'normal)
+                  (try (osi_kill* os-pid 15)))]))))
          (on-exit (begin (close-input-port from-stdout)
                          (close-input-port from-stderr))
            (close-output-port to-stdin)
@@ -622,17 +653,35 @@
               (let lp ()
                 (let ([line (get-line from-stderr)])
                   (unless (eof-object? line)
-                    (display line (trace-output-port))
-                    (newline (trace-output-port))
+                    (unless (and quiet? (not trace?))
+                      (display line (trace-output-port))
+                      (newline (trace-output-port)))
+                    (lp))))))
+           (spawn
+            (lambda ()
+              (let lp ()
+                (let ([fn (get-name from-stdout)])
+                  (send me `#(find-files-output ,os-pid ,fn))
+                  (unless (eof-object? fn)
                     (lp))))))
            (let lp ([ls '()])
-             (match (get-line from-stdout)
-               [#!eof (reverse ls)]
-               [,fn
-                (let ([fn (path-combine path fn)])
-                  (if (and (regular-file? fn) (keep-file? fn))
-                      (lp (cons fn ls))
-                      (lp ls)))]))))])))
+             (receive (after timeout (stop-command 'timeout))
+               [#(find-files-output ,@os-pid ,fn)
+                (cond
+                 [(eof-object? fn)
+                  (receive (after timeout (stop-command 'timeout))
+                    [#(process-terminated ,@os-pid ,exit-status ,term-signal)
+                     (if (and (eqv? exit-status 0) (eqv? term-signal 0))
+                         (reverse ls)
+                         (begin
+                           (trace-expr
+                            `(find-files => #(exit ,exit-status ,term-signal)))
+                           #f))])]
+                 [else
+                  (let ([fn (path-combine path fn)])
+                    (if (and (regular-file? fn) (keep-file? fn))
+                        (lp (cons fn ls))
+                        (lp ls)))])]))))])))
 
   (define (find-files-default path)
     (filter-files path
@@ -643,11 +692,28 @@
          [else #t]))
       keep-file?))
 
-  (define (find-files path)
-    (let ([ff (config:find-files)])
-      (if ff
-          (find-files-external ff path)
-          (find-files-default path))))
+  ;; --others --exclude-standard adds untracked files but not ignored
+  ;; ones. -z keeps git from quoting unusual file names.
+  (define git-ls-files
+    '("git" "ls-files" "-z" "--cached" "--others" "--exclude-standard"))
+
+  ;; Try the configured command, then git, then walk the directories.
+  ;; Returns which one succeeded (find-files, git, or directory-walk)
+  ;; and the files it found. A command that produces no output for
+  ;; timeout ms fails.
+  (define lsp:find-files
+    (case-lambda
+     [(path) (lsp:find-files path 10000)]
+     [(path timeout)
+      (let ([ff (config:find-files)])
+        (cond
+         [(and ff (find-files-external ff path get-line timeout #f)) =>
+          (lambda (files) (values 'find-files files))]
+         ;; Outside a repository git fails, which is expected.
+         [(find-files-external git-ls-files path get-nul-terminated timeout
+            #t) =>
+          (lambda (files) (values 'git files))]
+         [else (values 'directory-walk (find-files-default path))]))]))
 
   (define (lsp-server:start&link)
     (define-state-tuple <lsp-server>
@@ -763,9 +829,13 @@
           (let* ([me self]
                  [pid (spawn
                        (lambda ()
-                         (let ([files (trace-time 'enumerate-directories
-                                        (find-files dir))])
-                           (send me `#(project-files ,self ,files)))))])
+                         (let ([start (erlang:now)])
+                           (let-values ([(who files) (lsp:find-files dir)])
+                             (let ([end (erlang:now)])
+                               (trace-expr
+                                `(find-files ,who => ,(length files) files in
+                                   ,(- end start) ms))
+                               (send me `#(project-files ,self ,files)))))))])
             (monitor pid)
             ($state copy [indexer pid])))]
        [else state]))

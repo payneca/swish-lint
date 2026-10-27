@@ -51,7 +51,9 @@
 
   (define (disarm-user-config)
     (XDG_CONFIG_HOME (support-dir))
-    (config:find-files (list (path-combine (support-dir) "no-enumeration"))))
+    ;; A command that fails would fall back to git, so list nothing.
+    (config:find-files
+     (script-command (path-combine (support-dir) "no-enumeration"))))
 
   (define (write-script fn exprs)
     (let ([op (open-file-to-replace (make-directory-path fn))])

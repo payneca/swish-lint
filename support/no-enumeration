@@ -1,0 +1,2 @@
+#!/usr/bin/env swish
+;; Lists no files, so LSP tests index only what they open.
