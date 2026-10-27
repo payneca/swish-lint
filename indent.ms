@@ -1358,6 +1358,27 @@
     ")"
     ")"
     ")"))
+
+  ;; A ; inside a block comment doesn't start a line comment, so the
+  ;; comment ends at |# and the code after it is indented.
+  (check-indent
+   (code
+    "(let ()"
+    "  #| old ; note |#"
+    "  (foo"
+    "   bar))")
+   (code
+    "(let ()"
+    "#| old ; note |#"
+    "(foo"
+    "bar))"))
+
+  (check-tokens*
+   (lambda (expected actual)
+     (and (equal? expected (map token-raw actual))
+          (not (has-prop? (car (last-pair actual)) 'block-comment))))
+   '("#|" " " "a" " " ";" " " "b" " " "|#" " " "c")
+   "#| a ; b |# c")
   )
 
 (indent-mat datum-comments ()
@@ -1546,6 +1567,26 @@
     "#|#||#|#4"
     "#|| hello ||#5"
     "#| ; rats |#)"))
+
+  ;; The same block comments with code after each, so a comment that
+  ;; failed to end would leave the following line unindented.
+  (check-indent
+   (code
+    "(#|##|# |#|#1"
+    "  #||#2"
+    "  #|||#3"
+    "  #|#||#|#4"
+    "  #|| hello ||#5"
+    "  #| ; rats |#6"
+    "  7)")
+   (code
+    "(#|##|# |#|#1"
+    "#||#2"
+    "#|||#3"
+    "#|#||#|#4"
+    "#|| hello ||#5"
+    "#| ; rats |#6"
+    "7)"))
   )
 
 (indent-mat assemble-tokens ()
