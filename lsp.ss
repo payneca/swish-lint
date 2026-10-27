@@ -23,6 +23,7 @@
 #!chezscheme
 (library (lsp)
   (export
+   lsp:find-files
    lsp:read-loop
    lsp:start-server
    lsp:sup-spec
@@ -608,35 +609,56 @@
                             (pregexp-match (re "swish|scheme|petite") line)
                             #t)))))))))
 
-  (define (find-files-external ff path)
+  (define (get-nul-terminated ip)
+    (let ([c (get-char ip)])
+      (if (eof-object? c)
+          c
+          (let-values ([(op get) (open-string-output-port)])
+            (let lp ([c c])
+              (cond
+               [(or (eof-object? c) (char=? c #\nul)) (get)]
+               [else
+                (write-char c op)
+                (lp (get-char ip))]))))))
+
+  ;; Returns the files that cmd lists, one per get-name record, or #f
+  ;; if cmd can't be started, fails, or produces no output for
+  ;; idle-timeout ms. Unless quiet? is true, cmd's stderr is shown even
+  ;; when not tracing.
+  (define (find-files-external cmd path get-name idle-timeout quiet?)
     (define (read-files ip)
       (let lp ([ls '()])
-        (match (get-line ip)
-          [#!eof (reverse ls)]
-          [,fn
-           (let ([fn (path-combine path fn)])
-             (if (and (regular-file? fn) (keep-file? fn))
-                 (lp (cons fn ls))
-                 (lp ls)))])))
+        (let ([fn (get-name ip)])
+          (if (eof-object? fn)
+              (reverse ls)
+              (let ([fn (path-combine path fn)])
+                (if (and (regular-file? fn) (keep-file? fn))
+                    (lp (cons fn ls))
+                    (lp ls)))))))
     (define (show-stderr ip)
       (let lp ()
         (let ([line (get-line ip)])
           (unless (eof-object? line)
-            (display line (trace-output-port))
-            (newline (trace-output-port))
+            (unless (and quiet? (not trace?))
+              (display line (trace-output-port))
+              (newline (trace-output-port)))
             (lp)))))
-    (trace-expr `(find-files-external ,ff ,path))
+    (trace-expr `(find-files-external ,cmd ,path))
     (match
      (try
-      (os:run (car ff) (cdr ff)
+      (os:run (car cmd) (cdr cmd)
         (os:run-options
          [cwd path]
          [stdout read-files]
-         [stderr show-stderr])))
+         [stderr show-stderr]
+         [idle-timeout idle-timeout])))
      [`(catch ,reason)
       (trace-expr `(find-files => ,(exit-reason->english reason)))
-      '()]
-     [`(<os:result> ,stdout) stdout]))
+      #f]
+     [`(<os:result> ,stdout [exit-status 0] [term-signal 0]) stdout]
+     [`(<os:result> ,exit-status ,term-signal)
+      (trace-expr `(find-files => #(exit ,exit-status ,term-signal)))
+      #f]))
 
   (define (find-files-default path)
     (filter-files path
@@ -647,11 +669,28 @@
          [else #t]))
       keep-file?))
 
-  (define (find-files path)
-    (let ([ff (config:find-files)])
-      (if ff
-          (find-files-external ff path)
-          (find-files-default path))))
+  ;; --others --exclude-standard adds untracked files but not ignored
+  ;; ones. -z keeps git from quoting unusual file names.
+  (define git-ls-files
+    '("git" "ls-files" "-z" "--cached" "--others" "--exclude-standard"))
+
+  ;; Try the configured command, then git, then walk the directories.
+  ;; Returns which one succeeded (find-files, git, or directory-walk)
+  ;; and the files it found. A command that produces no output for
+  ;; idle-timeout ms fails.
+  (define lsp:find-files
+    (case-lambda
+     [(path) (lsp:find-files path 10000)]
+     [(path idle-timeout)
+      (let ([ff (config:find-files)])
+        (cond
+         [(and ff (find-files-external ff path get-line idle-timeout #f)) =>
+          (lambda (files) (values 'find-files files))]
+         ;; Outside a repository git fails, which is expected.
+         [(find-files-external git-ls-files path get-nul-terminated
+            idle-timeout #t) =>
+          (lambda (files) (values 'git files))]
+         [else (values 'directory-walk (find-files-default path))]))]))
 
   (define (lsp-server:start&link)
     (define-state-tuple <lsp-server>
@@ -767,9 +806,13 @@
           (let* ([me self]
                  [pid (spawn
                        (lambda ()
-                         (let ([files (trace-time 'enumerate-directories
-                                        (find-files dir))])
-                           (send me `#(project-files ,self ,files)))))])
+                         (let ([start (erlang:now)])
+                           (let-values ([(who files) (lsp:find-files dir)])
+                             (let ([end (erlang:now)])
+                               (trace-expr
+                                `(find-files ,who => ,(length files) files in
+                                   ,(- end start) ms))
+                               (send me `#(project-files ,self ,files)))))))])
             (monitor pid)
             ($state copy [indexer pid])))]
        [else state]))
