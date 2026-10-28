@@ -409,6 +409,24 @@
       ;; The server is still running.
       (assert (eq? json-null (request "textDocument/hover" (json:make-object)))))))
 
+(isolate-mat cancelled-request-finished ()
+  ;; A worker may finish just as its request is cancelled, leaving
+  ;; request-finished in the server's mailbox after the cancellation has
+  ;; responded. The server must not respond a second time.
+  (let ([rpc (start-lsp-server #f)]
+        [os (open-output-string)])
+    (on-exit (stop-lsp-server rpc)
+      (parameterize ([console-error-port os])
+        (send (whereis 'lsp-server) `#(request-finished ,self 9999 #f))
+        ;; This response comes after any response to 9999.
+        (rpc-client:call rpc
+          (json:make-object
+           [jsonrpc "2.0"]
+           [method "textDocument/hover"]
+           [params (json:make-object)])))
+      ;; The test client reports a response to an id it didn't send.
+      (assert (string=? "" (get-output-string os))))))
+
 (isolate-mat json-rpc-uninitialized ()
   (let ([rpc (start-uninitialized-lsp-server)])
     (on-exit (stop-lsp-server rpc)
