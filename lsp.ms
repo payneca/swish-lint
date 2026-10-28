@@ -1024,6 +1024,12 @@
           [(("unexpected end-of-file reading list" 1 from 0 0 to 1 0))
            (flush-diagnostics uri)])
 
+        ;; a ~ in a read error's message isn't a format directive
+        (did-change uri "\"a\\~b\"")
+        (match (extract-diagnostics (wait-for-diagnostics uri 5000))
+          [(("invalid string character \\~" 1 from 0 0 to 1 0))
+           (flush-diagnostics uri)])
+
         ;; checks report handling of range
         (parameterize ([optional-checkers
                         (list

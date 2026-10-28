@@ -123,7 +123,7 @@
                     (cons code (read-code code))))
         [`(catch ,reason)
          (let-values ([(line msg) (reason->line/msg reason loaded)])
-           (snoop line 'error msg))]
+           (snoop line 'error "~a" msg))]
         [(,code . ,annotated-code)
          (parameterize ([current-source-table (make-code-lookup-table code)])
            (check-import/export annotated-code snoop)
