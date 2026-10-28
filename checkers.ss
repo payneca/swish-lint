@@ -27,6 +27,7 @@
    make-external-checker
    make-regexp-checker
    run-optional-checkers
+   try-checker
    )
   (import
    (chezscheme)
@@ -37,9 +38,23 @@
    (tower-client)
    (trace))
 
+  ;; A checker that fails is reported as a diagnostic, so the other
+  ;; checkers still run and their diagnostics are still published.
+  (define (try-checker report thunk)
+    (match (try (thunk))
+      [`(catch ,reason)
+       (report 1 'error "checker failed: ~a"
+         ;; The reason may hold a large datum.
+         (parameterize ([print-level 4] [print-length 8])
+           (exit-reason->english reason)))]
+      [,_ (void)]))
+
   (define (run-optional-checkers uri skip-delay? annotated-code code report)
     (for-each
-     (lambda (check) (check uri skip-delay? annotated-code code report))
+     (lambda (check)
+       (try-checker report
+         (lambda ()
+           (check uri skip-delay? annotated-code code report))))
      (optional-checkers)))
 
   (define (check-import/export x report)

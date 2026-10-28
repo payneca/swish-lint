@@ -1049,6 +1049,19 @@
               ("INFO: informative" 3 from 1 11 to 1 28))
              (flush-diagnostics uri)]))
 
+        ;; a checker that fails is reported, and diagnostics are
+        ;; still published
+        (parameterize ([optional-checkers
+                        (list
+                         (lambda (uri skip-delay? annotated-code code report)
+                           (throw 'checker-broke))
+                         (make-regexp-checker 'info "INFO.*"))])
+          (did-change uri (code "(let ()" "  body   ; INFO: informative" "  body)"))
+          (match (extract-diagnostics (wait-for-diagnostics uri 5000))
+            [(("INFO: informative" 3 from 1 11 to 1 28)
+              ("checker failed: checker-broke" 1 from 0 0 to 1 0))
+             (flush-diagnostics uri)]))
+
         ;; checks report handling of annotation
         (did-change uri
           (code
