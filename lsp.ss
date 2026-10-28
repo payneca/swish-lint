@@ -112,11 +112,13 @@
           [log 4])]
        [message msg])))
 
+  ;; A successful response must have a result, so #f is sent as null.
   (define (rpc:respond id result)
-    (let ([res (json:make-object [jsonrpc "2.0"] [id id])])
-      (when result
-        (json:extend-object res [result result]))
-      (lsp:send res)))
+    (lsp:send
+     (json:make-object
+      [jsonrpc "2.0"]
+      [id id]
+      [result (or result json-null)])))
 
   (define (rpc:request id method params)
     (lsp:send
@@ -763,28 +765,46 @@
                [semtok-mode 'full]
                )))
     (define (terminate reason state) 'ok)
+    ;; params is optional. Without it, or when it isn't an object, a
+    ;; handler that needs a field reports it missing, with -32602.
+    (define (get-params msg)
+      (let ([params (json:ref msg 'params #f)])
+        (if (json:object? params)
+            params
+            (json:make-object))))
     (define (handle-call msg from state)
       (match msg
         [#(incoming-message ,msg)
-         (let ([id (json:ref msg 'id #f)])
+         (guard (not (json:object? msg)))
+         (rpc:respond-error json-null -32600
+           "Invalid Request: not an object")
+         `#(reply ok ,state)]
+        [#(incoming-message ,msg)
+         (let ([id (json:ref msg 'id #f)]
+               [method (json:ref msg 'method #f)])
            (cond
+            [(and (not id) (not method))
+             (rpc:respond-error json-null -32600
+               "Invalid Request: no id or method")
+             `#(reply ok ,state)]
             [(not id)
-             (let ([method (json:get msg 'method)]
-                   [params (json:ref msg 'params #f)])
-               `#(reply ok ,(do-handle-notify method params state)))]
+             `#(reply ok ,(do-handle-notify method (get-params msg) state))]
             [(and (string? id) (ht:ref ($state requests) id #f)) =>
              (lambda (callback)
                `#(reply ok
                    ,(callback msg
                       ($state copy* [requests (ht:delete requests id)]))))]
-            [(not (json:ref msg 'method #f))
+            [(not method)
              ;; A response to a request we are not waiting for
              (trace-expr `(unexpected-response ,id))
              `#(reply ok ,state)]
+            [(not (or (fixnum? id) (string? id)))
+             ;; LSP request ids are integers or strings.
+             (rpc:respond-error json-null -32600
+               "Invalid Request: id must be an integer or a string")
+             `#(reply ok ,state)]
             [else
-             (let ([method (json:get msg 'method)]
-                   [params (json:ref msg 'params #f)])
-               `#(reply ok ,(do-handle-request id method params state)))]))]))
+             `#(reply ok ,(do-handle-request id method (get-params msg) state))]))]))
     (define (handle-cast msg state)
       (match msg
         [tower-reconnected
@@ -896,14 +916,21 @@
           ($state copy* [uri->doc (ht:set uri->doc uri doc)]))))
 
     (define (do-handle-request id method params state)
-      (match (try (handle-request id method params state))
+      (match (if (or ($state client-cap) (equal? method "initialize"))
+                 (try (handle-request id method params state))
+                 `#(error -32002 "Server not initialized" ,state))
+        [`(catch #(json-path-not-found ,_ ,path))
+         (rpc:respond-error id -32602
+           (format "Invalid params: missing ~s" path))
+         state]
         [`(catch ,reason)
          (rpc:respond-error id -32000 reason)
          state]
         [#(ok ,result ,state)
          (rpc:respond id result)
          state]
-        [#(ignore ,state)
+        [#(error ,code ,reason ,state)
+         (rpc:respond-error id code reason)
          state]
         [#(spawn ,thunk ,state)
          (let* ([me self]
@@ -917,6 +944,11 @@
 
     (define (handle-request id method params state)
       (match method
+        ["initialize"
+         ;; client-cap also records that the server is initialized.
+         (guard (not (json:object? (json:get params 'capabilities))))
+         `#(error -32602 "Invalid params: capabilities must be an object"
+             ,state)]
         ["initialize"
          ;;(trace-msg (json:make-object [method method] [params params]))
          (let* ([root-uri (json:get params 'rootUri)]
@@ -1061,7 +1093,7 @@
         [,_
          (fprintf (console-error-port) "*** Unhandled message ~s ***\n" method)
          (trace-msg (json:make-object [id id] [method method] [params params]))
-         `#(ignore ,state)]))
+         `#(error -32601 ,(format "Method not found: ~a" method) ,state)]))
 
     (define (do-handle-notify method params state)
       (match (try (handle-notify method params state))
