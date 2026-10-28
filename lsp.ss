@@ -1103,9 +1103,17 @@
         ["textDocument/didClose"
          ;; The editor has saved or discarded the buffer, so the file on
          ;; disk is the truth. Index it so its refs stay findable.
-         (let ([uri (json:get params '(textDocument uri))])
-           (index-file uri #f
-             ($state copy* [uri->doc (ht:delete uri->doc uri)])))]
+         (let* ([uri (json:get params '(textDocument uri))]
+                [state (index-file uri #f
+                         ($state copy* [uri->doc (ht:delete uri->doc uri)]))])
+           ;; Clear the buffer's diagnostics. A publish from the old check
+           ;; worker may already be queued, but the empty publish below is
+           ;; queued later, so the client ends up with no diagnostics.
+           (rpc:fire-event "textDocument/publishDiagnostics"
+             (json:make-object
+              [uri uri]
+              [diagnostics '()]))
+           state)]
         ["workspace/didChangeConfiguration"
          (let* ([semtok-mode (json:ref params '(settings swish semtok-mode) #f)]
                 ;; Clients may send settings without our section, or
