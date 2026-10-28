@@ -795,8 +795,14 @@
     (define (handle-info msg state)
       (match msg
         [#(request-finished ,pid ,id ,result)
-         (rpc:respond id result)
-         `#(no-reply ,(delete-req id pid state))]
+         (cond
+          [(ht:ref ($state pid->req) pid #f)
+           (rpc:respond id result)
+           `#(no-reply ,(delete-req id pid state))]
+          [else
+           ;; The request was cancelled after the worker finished, and
+           ;; the cancellation has already responded.
+           `#(no-reply ,state)])]
         [#(project-files ,pid ,files)
          ;; A cancelled enumerator may have sent its files before it
          ;; was killed.
