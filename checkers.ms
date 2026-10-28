@@ -111,6 +111,24 @@
      results])
    'ok))
 
+(isolate-mat regexp-matches ()
+  ;; Groups aren't matches, a group that doesn't match is fine, every
+  ;; match on a line is reported, and an empty match isn't reported.
+  (define (run regexp text)
+    (let ([check (make-regexp-checker 'warning regexp)]
+          [results '()])
+      (check "file:///tmp/foo.ss" #t #f text
+        (lambda (x type fmt . args)
+          (set! results (cons (list x type (apply format fmt args)) results))))
+      (reverse results)))
+  (match-let*
+   ([((#(range 1 1 1 5) warning "TODO")
+      (#(range 2 1 2 5) warning "TODO")
+      (#(range 2 8 2 13) warning "TODO:"))
+     (run "TODO(:)?" (code "TODO x" "TODO a TODO: b"))]
+    [() (run "x*" (code "abc" ""))])
+   'ok))
+
 (isolate-mat optional ()
   (parameterize ([optional-checkers
                   (list
