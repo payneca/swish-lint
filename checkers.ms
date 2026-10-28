@@ -129,6 +129,28 @@
     [() (run "x*" (code "abc" ""))])
    'ok))
 
+(isolate-mat failing-checker ()
+  ;; A checker that fails is reported, and the checkers after it run.
+  (parameterize ([optional-checkers
+                  (list
+                   (lambda (uri skip-delay? annotated-code code report)
+                     (throw 'checker-broke))
+                   (make-regexp-checker 'info "INFO.*"))])
+    (match-let*
+     ([,results '()]
+      [,_
+       (run-optional-checkers "file:///tmp/foo.ss" #t #f
+         (code
+          "(let ()"
+          "  body   ; INFO: informative"
+          "  body)")
+         (lambda (x type fmt . args)
+           (set! results (cons (list x type (apply format fmt args)) results))))]
+      [((1 error "checker failed: checker-broke")
+        (#(range 2 12 2 29) info "INFO: informative"))
+       (reverse results)])
+     'ok)))
+
 (isolate-mat optional ()
   (parameterize ([optional-checkers
                   (list
