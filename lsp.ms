@@ -103,6 +103,37 @@
 ;; Unless wait? is true, return without waiting for the project to be
 ;; indexed.
 (define (start-lsp-server* path wait?)
+  (let ([rpc (start-uninitialized-lsp-server)])
+    (define wait-for-progress (capture-progress))
+    (rpc-client:call rpc
+      (json:make-object
+       [jsonrpc "2.0"]
+       [method "initialize"]
+       [params
+        (json:make-object
+         [rootUri
+          (cond
+           [(and path (format "file://~a" path))]
+           [else json-null])]
+         [capabilities (json:make-object)])]))
+    (rpc-client:notify rpc
+      (json:make-object
+       [jsonrpc "2.0"]
+       [method "initialized"]
+       [params (json:make-object)]))
+    (cond
+     [(not wait?) 'ok]
+     [path
+      (wait-for-progress "enumerate-directories")]
+     [else
+      ;; give server enough time to process the messages, possibly
+      ;; producing startup messages.
+      (receive (after 100 'ok))])
+    rpc))
+
+;; Starts the tower and the LSP server and returns the rpc client,
+;; without sending initialize.
+(define (start-uninitialized-lsp-server)
   (define-values (ip1 op1) (make-pipe "pipe1"))
   (define-values (ip2 op2) (make-pipe "pipe2"))
   (define-values (tip top) (make-pipe "trace pipe"))
@@ -134,31 +165,6 @@
                (lambda (msg)
                  ;;(json:write (trace-output-port) msg 0)
                  (rpc-client:message rpc msg)))))])
-   (define wait-for-progress (capture-progress))
-   (rpc-client:call rpc
-     (json:make-object
-      [jsonrpc "2.0"]
-      [method "initialize"]
-      [params
-       (json:make-object
-        [rootUri
-         (cond
-          [(and path (format "file://~a" path))]
-          [else json-null])]
-        [capabilities (json:make-object)])]))
-   (rpc-client:notify rpc
-     (json:make-object
-      [jsonrpc "2.0"]
-      [method "initialized"]
-      [params (json:make-object)]))
-   (cond
-    [(not wait?) 'ok]
-    [path
-     (wait-for-progress "enumerate-directories")]
-    [else
-     ;; give server enough time to process the messages, possibly
-     ;; producing startup messages.
-     (receive (after 100 'ok))])
    rpc))
 
 (define (stop-lsp-server rpc)
@@ -360,6 +366,69 @@
   (let ([rpc (start-lsp-server #f)])
     (on-exit (stop-lsp-server rpc)
       'ok)))
+
+(isolate-mat json-rpc ()
+  (define (request method params)
+    (try
+     (rpc-client:call 'rpc
+       (json:make-object
+        [jsonrpc "2.0"]
+        [method method]
+        [params params]))))
+  (let ([rpc (start-lsp-server #f)])
+    (on-exit (stop-lsp-server rpc)
+      ;; Error responses with a null id go to the event handler.
+      (rpc-client:set-event-handler 'rpc 'invalid
+        (lambda (msg)
+          (and (eq? (json:ref msg 'id #f) json-null)
+               `#(invalid ,(json:ref msg '(error code) #f))))
+        self)
+      (match-let*
+       ([`(catch #(rpc-error -32601 "Method not found: foo/bar"))
+         (request "foo/bar" (json:make-object))]
+        [`(catch #(rpc-error -32602 ,_))
+         (request "textDocument/completion" (json:make-object))]
+        ;; A #f result is sent as null.
+        [,result (request "textDocument/hover" (json:make-object))])
+       (assert (eq? result json-null)))
+
+      ;; An id that isn't an integer or a string, and a message with
+      ;; neither an id nor a method, get Invalid Request.
+      (rpc-client:notify 'rpc
+        (json:make-object
+         [jsonrpc "2.0"]
+         [id (expt 2 70)]
+         [method "textDocument/hover"]
+         [params (json:make-object)]))
+      (receive (after 5000 (throw 'no-response)) [#(invalid -32600) 'ok])
+      (rpc-client:notify 'rpc
+        (json:make-object
+         [jsonrpc "2.0"]
+         [params (json:make-object)]))
+      (receive (after 5000 (throw 'no-response)) [#(invalid -32600) 'ok])
+      ;; The server is still running.
+      (assert (eq? json-null (request "textDocument/hover" (json:make-object)))))))
+
+(isolate-mat json-rpc-uninitialized ()
+  (let ([rpc (start-uninitialized-lsp-server)])
+    (on-exit (stop-lsp-server rpc)
+      (match-let*
+       ([`(catch #(rpc-error -32002 "Server not initialized"))
+         (try
+          (rpc-client:call rpc
+            (json:make-object
+             [jsonrpc "2.0"]
+             [method "textDocument/hover"]
+             [params (json:make-object)])))])
+       ;; Initialize, so that stop-lsp-server can shut down.
+       (rpc-client:call rpc
+         (json:make-object
+          [jsonrpc "2.0"]
+          [method "initialize"]
+          [params
+           (json:make-object
+            [rootUri json-null]
+            [capabilities (json:make-object)])]))))))
 
 (isolate-mat smoke ()
   (let ([rpc (start-lsp-server (get-real-path "."))])

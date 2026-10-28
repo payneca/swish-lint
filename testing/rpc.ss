@@ -39,7 +39,9 @@
   (define (rpc-reply x)
     (cond
      [(json:ref x 'error #f) =>
-      (lambda (err) (make-fault (json:ref err 'message #f)))]
+      (lambda (err)
+        (make-fault
+         `#(rpc-error ,(json:ref err 'code #f) ,(json:ref err 'message #f))))]
      [else
       (let ([res (json:ref x 'result #!bwp)])
         (when (eq? res #!bwp)
@@ -98,6 +100,12 @@
         [#(message ,msg)
          (match (json:ref msg 'id #f)
            [#f
+            (call-event-handler msg ($state event-handlers))
+            `#(no-reply ,state)]
+           [,id
+            (guard (eq? id json-null))
+            ;; An error response to a message the server couldn't
+            ;; identify.
             (call-event-handler msg ($state event-handlers))
             `#(no-reply ,state)]
            [,id
