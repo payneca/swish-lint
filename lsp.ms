@@ -801,6 +801,21 @@
         (did-close uri)
         (match-let* ([() (format-document uri)]) 'ok)))))
 
+(isolate-mat did-close-diagnostics ()
+  ;; Closing a file clears its diagnostics in the client.
+  (let ([rpc (start-lsp-server #f)])
+    (on-exit (stop-lsp-server rpc)
+      (define wait-for-diagnostics (capture-diagnostics))
+      (define (flush-diagnostics uri)
+        (when (wait-for-diagnostics uri 100)
+          (flush-diagnostics uri)))
+      (let ([uri "file:///tmp/close-diagnostics.ss"])
+        (did-open uri "(")
+        (match (wait-for-diagnostics uri 5000)
+          [(,_) (flush-diagnostics uri)])
+        (did-close uri)
+        (match-let* ([() (wait-for-diagnostics uri 5000)]) 'ok)))))
+
 (isolate-mat did-close-cancels-buffer-refs ()
   ;; Closing a file right after it's opened cancels the buffer's
   ;; reference update, so it can't land after the re-index from disk.
