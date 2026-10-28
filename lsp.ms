@@ -476,8 +476,21 @@
                  (throw `#(failed ,actual ,exp)))
                (lp (+ n 1) rest)]))]))))
 
+  ;; The tower loads keywords in the background, possibly after the
+  ;; project is indexed. Getting them runs another Scheme process,
+  ;; which gives up after 10 seconds.
+  (define (wait-for-keywords)
+    (let lp ([tries 0])
+      (match (transaction 'log-db
+               (execute "select 1 from keywords where keyword = 'zero?'"))
+        [() (if (< tries 1500)
+                (receive (after 10 (lp (+ tries 1))))
+                (throw 'no-keywords))]
+        [,_ 'ok])))
+
   (let ([rpc (start-lsp-server (get-real-path "."))])
     (on-exit (stop-lsp-server rpc)
+      (wait-for-keywords)
       (assert (null? (get-completions "file:///tmp/does-not-exist.ss" 0 0)))
       (let ([uri "file:///tmp/foo.ss"])
         (did-open uri "")
