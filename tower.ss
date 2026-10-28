@@ -566,17 +566,24 @@ order by distance is null, distance asc, count desc, candidates.name asc"
                (upgrade-db)
                (init-db)))
       [#(ok ,_)
-       (let ([keywords
-              (get-keywords
-               (lambda (reason)
-                 (do-log 1
-                   (json:make-object
-                    [_op_ "get-keywords"]
-                    [error (exit-reason->english reason)]))))])
-         ($update-keywords (erlang:now) keywords))
        (db:expire-cache 'log-db)
        'ignore]
       [,error error]))
+
+  ;; Getting the keywords runs another Scheme process, so it starts after
+  ;; the listener and runs in the background. Until it finishes,
+  ;; completions just lack keywords.
+  (define (tower:load-keywords)
+    (spawn
+     (lambda ()
+       ($update-keywords (erlang:now)
+         (get-keywords
+          (lambda (reason)
+            (do-log 1
+              (json:make-object
+               [_op_ "get-keywords"]
+               [error (exit-reason->english reason)])))))))
+    'ignore)
 
   (define (tower:sup-spec port-number)
     `(#(tower-db:setup ,tower-db:setup temporary 1000 worker)
@@ -633,7 +640,8 @@ order by distance is null, distance asc, count desc, candidates.name asc"
                          (pre ,(versions->string))))))]))]
              ["/tower"
               (ws:upgrade conn request (spawn&link client))]
-             [,_ #f])))))
+             [,_ #f])))
+      #(tower:load-keywords ,tower:load-keywords temporary 1000 worker)))
 
   (define (tower:start-server verbose tower-db port-number)
     (verbosity (or verbose 0))
