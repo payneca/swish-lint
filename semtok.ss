@@ -83,11 +83,11 @@
     (let ([local (make-process-parameter #f)])
       (lambda ()
         (or (local)
-            (let ([v (pregexp
-                      (format "^(?:trace-)?(?:~a)(?:-[\\S]+)?$"
-                        (join (cons "define" (map pregexp-quote (config:definition-keywords))) #\|)))])
+            (let ([v (pregexp (format "^~a$" (definition-keyword-pattern)))])
               (local v)
               v)))))
+
+  (define primitive-prefix-regexp (pregexp (format "^~a" primitive-prefix)))
 
   (define (last-char s)
     (string-ref s (- (string-length s) 1)))
@@ -166,13 +166,13 @@
           (let* ([mods (semtok:modifiers)]
                  [mods
                   (cond
-                   [(pregexp-match (re "^#([23])?%") raw) =>
-                    (lambda (ls)
-                      (enum-set-union mods
-                        (match ls
-                          [(,_ #f) (semtok:modifiers internal)]
-                          [(,_ "2") (semtok:modifiers optimize2)]
-                          [(,_ "3") (semtok:modifiers optimize3)])))]
+                   [(pregexp-match primitive-prefix-regexp raw)
+                    ;; #%, #2%, or #3%
+                    (enum-set-union mods
+                      (match (string-ref raw 1)
+                        [#\% (semtok:modifiers internal)]
+                        [#\2 (semtok:modifiers optimize2)]
+                        [#\3 (semtok:modifiers optimize3)]))]
                    [else mods])]
                  [mods
                   (if (char=? (last-char raw) #\!)
