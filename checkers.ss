@@ -143,17 +143,23 @@
            [lines (split code #\newline) (cdr lines)])
           ((null? lines))
         (let ([line (car lines)])
-          (let lp ([x (pregexp-match-positions compiled-regexp line)])
-            (match x
+          ;; Report every match on the line. The first element of a
+          ;; result is the whole match; the rest are its groups.
+          (let lp ([i 0])
+            (match (pregexp-match-positions compiled-regexp line i)
               [#f (void)]
-              [() (void)]
-              [((,start . ,end) . ,rest)
-               ;; start and end are 0-based, but #(range ...) is 1-based
-               (report `#(range ,ln ,(+ start 1) ,ln ,(+ end 1))
-                 type
-                 "~a"
-                 (substring line start end))
-               (lp rest)]))))))
+              [((,start . ,end) . ,_)
+               (cond
+                [(= start end)
+                 ;; Skip an empty match so the search moves on.
+                 (lp (+ end 1))]
+                [else
+                 ;; start and end are 0-based, but #(range ...) is 1-based
+                 (report `#(range ,ln ,(+ start 1) ,ln ,(+ end 1))
+                   type
+                   "~a"
+                   (substring line start end))
+                 (lp end)])]))))))
 
   (define (make-external-checker ls)
     (lambda (uri skip-delay? annotated-code code report)
