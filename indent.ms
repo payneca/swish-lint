@@ -667,7 +667,7 @@
          (format "(~a test1" kw)
          "test2"
          "test3)"))))
-   '("and" "or" "fx+" "#2%fx+" "#3%fx+"))
+   '("and" "or" "fx+" "#%fx+" "#2%fx+" "#3%fx+"))
   )
 
 (indent-mat let-special ()
