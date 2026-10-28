@@ -199,29 +199,40 @@
             (display line (trace-output-port))
             (newline (trace-output-port))
             (process-stderr ip pid))))
-      (define (run-command cmd)
+      (define (run-command cmd filename)
+        ;; A failed run gets one diagnostic for the user, and the reason
+        ;; goes to the log. The checker's own stderr goes to the trace.
+        (define (failed why)
+          (fprintf (console-error-port)
+            "swish-lint: external checker ~a failed on ~a: ~a\n"
+            (car cmd) filename why)
+          (flush-output-port (console-error-port))
+          (report 1 'warning "external checker ~a failed; see the log"
+            (path-last (car cmd))))
         (trace-time `(run-external-checker ,@cmd)
           (match (os-process:start&link (car cmd) (cdr cmd) 'utf8
                    process-input #f process-stderr)
             [#(error ,reason)
-             (throw reason)]
+             (failed (format "couldn't start: ~a" (exit-reason->english reason)))]
             [#(ok ,pid)
              (let ([m (monitor pid)])
-               (let lp ([lookup-table #f])
+               ;; ended is how the program ended, once os-process says.
+               (let lp ([lookup-table #f] [reported 0] [ended #f])
                  (receive (after 5000
+                            ;; Unlink first, or stopping it would stop
+                            ;; this process too.
+                            (unlink pid)
                             (kill pid 'shutdown)
                             (receive (after 5000
                                        (kill pid 'kill)
-                                       (receive
-                                        [`(DOWN ,@m ,_ ,_ ,err)
-                                         (throw err)]))
-                              [`(DOWN ,@m ,_ ,_ ,err)
-                               (throw err)]))
+                                       (receive [`(DOWN ,@m ,_ ,_) 'ok]))
+                              [`(DOWN ,@m ,_ ,_) 'ok])
+                            (failed "produced no output for 5 s"))
                    [#(process-error ,str)
                     (let ([lookup-table (or lookup-table (make-code-lookup-table code))])
                       (let-values ([(line msg) (reason->line/msg str lookup-table)])
                         (report line 'error "~a" msg)
-                        (lp lookup-table)))]
+                        (lp lookup-table (+ reported 1) ended)))]
                    [#(process-json ,obj)
                     (let* ([msg (json:ref obj 'message #f)]
                            [type (match (json:ref obj 'type #f)
@@ -233,12 +244,30 @@
                            [line (and line (fixnum? line) (fxpositive? line) line)]
                            [col (json:ref obj 'column #f)]
                            [col (and col (fixnum? col) (fxpositive? col) col)])
-                      (when msg
-                        (report `#(near ,code ,line ,col) type "~a" msg))
-                      (lp lookup-table))]
+                      (cond
+                       [msg
+                        (report `#(near ,code ,line ,col) type "~a" msg)
+                        (lp lookup-table (+ reported 1) ended)]
+                       [else
+                        (lp lookup-table reported ended)]))]
+                   [#(os-process-exited ,@pid ,exit-status ,term-signal)
+                    (lp lookup-table reported `#(exited ,exit-status ,term-signal))]
+                   [#(os-process-failed ,@pid ,reason)
+                    (lp lookup-table reported `#(failed ,reason))]
                    [`(DOWN ,@m ,_ ,reason)
-                    (unless (eq? reason 'normal)
-                      (trace-expr `(external-checker ,(exit-reason->english reason))))])))])))
+                    (match ended
+                      [#(exited 0 0) (void)]
+                      [#(exited ,exit-status 0)
+                       ;; Programs like this exit nonzero when they report
+                       ;; problems, so that alone isn't a failure.
+                       (when (= reported 0)
+                         (failed (format "exited with status ~a" exit-status)))]
+                      [#(exited ,_ ,term-signal)
+                       (failed (format "was stopped by signal ~a" term-signal))]
+                      [#(failed ,reason)
+                       (failed (exit-reason->english reason))]
+                      [#f
+                       (failed (exit-reason->english reason))])])))])))
       (when skip-delay?                 ; recently saved
         (let* ([filename
                 (if (starts-with? uri "file:")
@@ -257,5 +286,5 @@
                      '()
                      ls)])
           (when cmd       ; skip the file if the filename regexp fails
-            (run-command cmd))))))
+            (run-command cmd filename))))))
   )

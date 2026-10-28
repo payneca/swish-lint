@@ -151,6 +151,76 @@
        (reverse results)])
      'ok)))
 
+(isolate-mat external-failures ()
+  ;; A run that fails gives one warning and one log line. Returns the
+  ;; diagnostics and what was written to the log.
+  (define (run cmd)
+    (let ([check (make-external-checker cmd)]
+          [results '()]
+          [os (open-output-string)])
+      (parameterize ([console-error-port os])
+        (check "file:///tmp/foo.ss" #t #f ""
+          (lambda (x type fmt . args)
+            (set! results (cons (list x type (apply format fmt args)) results)))))
+      (list (reverse results) (get-output-string os))))
+  (define (failed? results log why)
+    (match results
+      [((1 warning ,msg))
+       (and (pregexp-match "^external checker .* failed; see the log$" msg)
+            (pregexp-match
+             (format "^swish-lint: external checker .* failed on /tmp/foo.ss: ~a"
+               why)
+             log)
+            #t)]
+      [,_ #f]))
+  (with-tmp-dir
+   ;; The program can't be started.
+   (match-let*
+    ([(,results ,log) (run (list (path-combine (tmp-dir) "dne")))])
+    (assert (failed? results log "couldn't start")))
+   ;; It exits nonzero without any diagnostics.
+   (let ([fn (path-combine (tmp-dir) "exit-1")])
+     (write-script fn '((exit 1)))
+     (match-let*
+      ([(,results ,log) (run (script-command fn))])
+      (assert (failed? results log "exited with status 1")))
+     (remove-file fn))
+   ;; A nonzero exit with diagnostics is how such programs report
+   ;; problems, so it isn't a failure.
+   (let ([fn (path-combine (tmp-dir) "found-1")])
+     (write-script fn
+       '((json:pretty
+          (json:make-object
+           [type "warning"]
+           [line 1]
+           [message "found it"]))
+         (exit 1)))
+     (match-let*
+      ([(((,_ warning "found it")) "") (run (script-command fn))])
+      'ok)
+     (remove-file fn))
+   ;; Its output can't be read.
+   (let ([fn (path-combine (tmp-dir) "bad-json")])
+     (write-script fn '((display "{ bad\n")))
+     (match-let*
+      ([(,results ,log) (run (script-command fn))])
+      (assert (failed? results log "")))
+     (remove-file fn))
+   ;; It produces no output for 5 s.
+   (let ([fn (path-combine (tmp-dir) "slow")])
+     (write-script fn '((receive (after 10000 'ok))))
+     (match-let*
+      ([(,results ,log) (run (script-command fn))])
+      (assert (failed? results log "produced no output for 5 s")))
+     (remove-file fn))
+   ;; It exits 0 without any diagnostics.
+   (let ([fn (path-combine (tmp-dir) "quiet")])
+     (write-script fn '())
+     (match-let*
+      ([(() "") (run (script-command fn))])
+      'ok)
+     (remove-file fn))))
+
 (isolate-mat optional ()
   (parameterize ([optional-checkers
                   (list
