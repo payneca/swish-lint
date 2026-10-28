@@ -149,13 +149,18 @@
         (let ([cmd (path-combine (path-parent (app:path)) "swish-lint")])
           (fprintf (trace-output-port) "Launching ~a\n" cmd)
           (spawn-os-process-detached cmd '("--tower"))
-          (let lp ([n 1])
-            (receive (after 200 'ok))
-            (fprintf (trace-output-port) "Reconnecting...\n")
-            (cond
-             [(try-connect)]
-             [(< n 10) (lp (+ n 1))]
-             [else (throw 'unable-to-connect)])))]))
+          ;; Poll with exponential backoff: 50 ms, doubling, at most
+          ;; 500 ms apart. Give up after about 4 s, before the 5 s
+          ;; timeout of the calls waiting behind this one.
+          (let ([deadline (+ (erlang:now) 4000)])
+            (let lp ([delay 50])
+              (receive (after delay 'ok))
+              (fprintf (trace-output-port) "Reconnecting...\n")
+              (cond
+               [(try-connect)]
+               [(< (erlang:now) deadline)
+                (lp (min (* delay 2) 500 (- deadline (erlang:now))))]
+               [else (throw 'unable-to-connect)]))))]))
     (define (connect state)
       (cond
        [($state ws) state]
