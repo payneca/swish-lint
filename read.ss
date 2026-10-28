@@ -23,10 +23,12 @@
 (library (read)
   (export
    annotation
+   definition-keyword-pattern
    fp->line
    fp->line/char
    line/char->fp
    make-code-lookup-table
+   primitive-prefix
    read-code
    read-token-near/col
    read-token-near/fp
@@ -154,11 +156,21 @@
 
   (define identifier "[:*+A-Za-z0-9~&!?\\/<=>^%$@_.-]+")
 
+  ;; The #%, #2%, or #3% prefix of a reference to a primitive.
+  (define primitive-prefix "#[23]?%")
+
+  ;; A keyword that introduces a definition: define or a keyword from
+  ;; the project configuration, alone or with a -suffix, as in
+  ;; define-syntax, and optionally after trace-. It isn't anchored; a
+  ;; whole name should match it with ^ and $, so that defined? doesn't.
+  (define (definition-keyword-pattern)
+    (format "(?:trace-)?(?:~a)(?:-\\S+)?"
+      (join (cons "define" (map pregexp-quote (config:definition-keywords)))
+        #\|)))
+
   (define (defn-exprs)
     (list
-     (format "(?:~a\\s+)?(?:trace-)?(?:~a)(?:-[\\S]+|\\s)?\\s+\\(?"
-       identifier
-       (join (cons "define" (map pregexp-quote (config:definition-keywords))) #\|))
+     (format "(?:~a\\s+)?~a\\s+\\(?" identifier (definition-keyword-pattern))
      "set(?:-who)?!\\s+"))
 
   (define (defn-regexp)
@@ -178,22 +190,27 @@
          (lp end)]
         [,_ (void)])))
 
+  ;; Returns a predicate for symbols whose names match regexp. Each
+  ;; predicate has its own cache, so a match for one pattern doesn't
+  ;; count for another.
+  (define (keyword-matcher regexp)
+    (let ([mre (pregexp regexp)]
+          [cache (make-eq-hashtable)])
+      (lambda (x)
+        (and (symbol? x)
+             (let ([cell (eq-hashtable-cell cache x 'unknown)])
+               (when (eq? (cdr cell) 'unknown)
+                 (set-cdr! cell
+                   (and (pregexp-match mre (symbol->string x)) #t)))
+               (cdr cell))))))
+
   (define (walk-defns* annotated-code proc include-outer?)
-    (define defines (join (cons "define" (map pregexp-quote (config:definition-keywords))) #\|))
-    (define defun-match-regexp
-      (re (format "^(?:trace-)?(?:~a)(?:-[\\S]+)?" defines)))
-    (define def-match-regexp
-      (re (format "^(?:trace-)?(?:~a)(?:-[\\S]+)?|^set(?:-who)?!" defines)))
-    (define local-keywords (make-eq-hashtable))
-    (define (keyword? keyword mre)
-      (and (symbol? keyword)
-           (or (eq-hashtable-ref local-keywords keyword #f)
-               (let ([str (symbol->string keyword)])
-                 (match (pregexp-match mre str)
-                   [#f #f]
-                   [,_
-                    (eq-hashtable-set! local-keywords keyword #t)
-                    #t])))))
+    ;; A defun form names its definition in a list, as in (define (f x) ...).
+    (define defun-keyword?
+      (keyword-matcher (format "^~a$" (definition-keyword-pattern))))
+    (define def-keyword?
+      (keyword-matcher
+       (format "^(?:~a|set(?:-who)?!)$" (definition-keyword-pattern))))
     (define (guarded name name.anno outer.anno)
       (cond
        [(not (symbol? name)) (void)]
@@ -217,21 +234,21 @@
           [`(annotation [stripped (,keyword (,name . ,_) . ,_)]
               [expression
                (,_ `(annotation [expression (,name.anno . ,_)]) . ,_)])
-           (guard (keyword? keyword defun-match-regexp))
+           (guard (defun-keyword? keyword))
            (guarded name name.anno x)]
           [`(annotation [stripped (,keyword ,name . ,_)]
               [expression (,_ ,name.anno . ,_)])
-           (guard (keyword? keyword def-match-regexp))
+           (guard (def-keyword? keyword))
            (guarded name name.anno x)]
           [`(annotation [stripped (,meta ,keyword (,name . ,_) . ,_)]
               [expression
                (,_ ,_ `(annotation [expression (,name.anno . ,_)]) . ,_)])
-           (guard (and (symbol? meta) (keyword? keyword defun-match-regexp)))
+           (guard (and (symbol? meta) (defun-keyword? keyword)))
            (guarded name name.anno x)]
           [`(annotation [stripped (,meta ,keyword ,name . ,_)]
               [expression (,_ ,_ ,name.anno . ,_)])
            ;; Use defun here because set! is not valid with meta.
-           (guard (and (symbol? meta) (keyword? keyword defun-match-regexp)))
+           (guard (and (symbol? meta) (defun-keyword? keyword)))
            (guarded name name.anno x)]
           [,_ (void)]))))
 
@@ -243,7 +260,7 @@
 
   ;; optional capture, #%, #2%, or #3% primitive prefix
   ;; capture, identifier
-  (define ref-regexp (re (format "(#[23]?%)?(~a)" identifier)))
+  (define ref-regexp (re (format "(~a)?(~a)" primitive-prefix identifier)))
 
   (define (walk-refs-re text proc)
     (let lp ([start 0])
