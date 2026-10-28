@@ -184,7 +184,9 @@
          (publish-diagnostics uri)
          (unless skip-delay?
            (receive (after 30000 'ok)))
-         (check-line-whitespace (doc:text doc) #t report)
+         (try-checker report
+           (lambda ()
+             (check-line-whitespace (doc:text doc) #t report)))
          (publish-diagnostics uri)
          ;; Wait for the reference update. It's linked to this worker,
          ;; so replacing the worker, as closing the file does, then
@@ -305,7 +307,9 @@
        (let* ([source-table (doc:source-table doc)]
               [updater (spawn-update-refs uri annotated-code source-table text)])
          (current-source-table source-table)
-         (check-import/export annotated-code report)
+         (try-checker report
+           (lambda ()
+             (check-import/export annotated-code report)))
          (run-optional-checkers uri skip-delay? annotated-code text report)
          updater)]))
 

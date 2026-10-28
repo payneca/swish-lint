@@ -126,8 +126,12 @@
            (snoop line 'error "~a" msg))]
         [(,code . ,annotated-code)
          (parameterize ([current-source-table (make-code-lookup-table code)])
-           (check-import/export annotated-code snoop)
-           (check-line-whitespace code #f snoop)
+           (try-checker snoop
+             (lambda ()
+               (check-import/export annotated-code snoop)))
+           (try-checker snoop
+             (lambda ()
+               (check-line-whitespace code #f snoop)))
            (run-optional-checkers filename #t annotated-code code snoop))])
       return-value))
   )
