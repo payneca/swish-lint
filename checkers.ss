@@ -110,7 +110,7 @@
          [else
           (for-each
            (lambda (line)
-             (report line 'error text))
+             (report line 'error "~a" text))
            lines)])))
     (define tabs '())
     (define dos '())
