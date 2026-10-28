@@ -202,12 +202,19 @@
       (spawn
        (lambda ()
          (with-gatekeeper-mutex $update-refs 'infinity
-           ;; A missing file has no refs. A file that can't be read
+           ;; A missing file has no refs, and neither does one that
+           ;; can't be opened, such as mode 000. Code that can't be read
            ;; falls back to regular expressions, as check does.
            (let* ([filename (uri->abs-path uri)]
                   [doc (string->doc
                         (if (file-exists? filename)
-                            (utf8->string (read-file filename))
+                            (match (try (utf8->string (read-file filename)))
+                              [`(catch ,reason)
+                               (trace-expr
+                                `(update-refs ,filename
+                                   => ,(exit-reason->english reason)))
+                               ""]
+                              [,text text])
                             "")
                         #f)]
                   [annotated-code (match (doc:read doc)
@@ -592,20 +599,26 @@
         '()]
        [,result result])))
 
+  ;; A file that can't be opened is skipped, so that one file doesn't
+  ;; stop the whole project from being found.
   (define (keep-file? fn)
     (let ([ext (path-extension fn)])
       (or (member ext '("ss" "ms"))
-          (let ([ip (open-binary-file-to-read fn)])
-            (on-exit (close-port ip)
-              (and (eqv? (get-u8 ip) (char->integer #\#))
-                   (eqv? (get-u8 ip) (char->integer #\!))
-                   (let ([b (get-u8 ip)])
-                     (or (eqv? b (char->integer #\space)) (eqv? b (char->integer #\/))))
-                   (let ([ip (binary->utf8 ip)])
-                     (let ([line (get-line ip)])
-                       (and (not (eof-object? line))
-                            (pregexp-match (re "swish|scheme|petite") line)
-                            #t)))))))))
+          (match (try (open-binary-file-to-read fn))
+            [`(catch ,reason)
+             (trace-expr `(keep-file? ,fn => ,(exit-reason->english reason)))
+             #f]
+            [,ip
+             (on-exit (close-port ip)
+               (and (eqv? (get-u8 ip) (char->integer #\#))
+                    (eqv? (get-u8 ip) (char->integer #\!))
+                    (let ([b (get-u8 ip)])
+                      (or (eqv? b (char->integer #\space)) (eqv? b (char->integer #\/))))
+                    (let ([ip (binary->utf8 ip)])
+                      (let ([line (get-line ip)])
+                        (and (not (eof-object? line))
+                             (pregexp-match (re "swish|scheme|petite") line)
+                             #t)))))]))))
 
   (define (get-nul-terminated ip)
     (let ([c (get-char ip)])

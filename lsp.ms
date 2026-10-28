@@ -1069,6 +1069,57 @@
            (assert (equal? files (list fn))))))
      (delete-file fn))))
 
+(isolate-mat find-files-unreadable ()
+  ;; A file that can't be read is skipped, and the rest of the project
+  ;; is still found.
+  (with-tmp-dir
+   (let ([good (path-combine (tmp-dir) "good.ss")]
+         [locked (path-combine (tmp-dir) "locked.txt")])
+     (write-text good "(define good 1)\n")
+     (write-text locked "plain text\n")
+     (set-file-mode locked #o000)
+     (on-exit (set-file-mode locked #o644)
+       ;; Mode 000 doesn't stop Windows or root from reading it.
+       (match (try (close-port (open-binary-file-to-read locked)))
+         [`(catch ,_)
+          ;; Keep git from finding the swish-lint repository.
+          (GIT_CEILING_DIRECTORIES (path-parent (tmp-dir)))
+          (on-exit (GIT_CEILING_DIRECTORIES "")
+            (parameterize ([config:find-files #f])
+              (let-values ([(who files) (lsp:find-files (tmp-dir))])
+                (assert (eq? who 'directory-walk))
+                (assert (equal? files (list good))))))]
+         [,_ 'readable-anyway]))
+     (delete-file locked)
+     (delete-file good))))
+
+(isolate-mat unreadable-file-reindex ()
+  ;; Closing a file that can't be read from disk clears its buffer's
+  ;; references, as if the file were missing.
+  (let ([rpc (start-lsp-server (get-real-path "."))])
+    (on-exit (stop-lsp-server rpc)
+      (define wait-for-test-sync (capture-test-sync))
+      (with-tmp-dir
+       (let* ([fn (path-combine (tmp-dir) "locked.ss")]
+              [uri1 (abs-path->uri fn)]
+              [uri2 "file:///tmp/user.ss"])
+         (write-text fn "(define locked 1)\n")
+         (set-file-mode fn #o000)
+         (on-exit (set-file-mode fn #o644)
+           ;; Mode 000 doesn't stop Windows or root from reading it.
+           (match (try (close-port (open-binary-file-to-read fn)))
+             [`(catch ,_)
+              (did-open uri1 "(define locked 1)\n")
+              (did-open uri2 "(list locked)\n")
+              (for-each wait-for-test-sync (list uri1 uri2))
+              (assert (pair? (get-definitions uri2 0 7)))
+              (did-close uri1)
+              (wait-for-test-sync uri1)
+              (assert (null? (get-definitions uri2 0 7)))
+              (did-close uri2)]
+             [,_ 'readable-anyway]))
+         (delete-file fn))))))
+
 (isolate-mat uri-encoding ()
   (define (get-defns uri line0 char0)
     (map
