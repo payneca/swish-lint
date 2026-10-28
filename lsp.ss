@@ -299,7 +299,7 @@
        (let* ([table (doc:source-table doc)]
               [updater (spawn-update-refs uri #f table text)])
          (let-values ([(line msg) (reason->line/msg reason table)])
-           (report line 'error msg))
+           (report line 'error "~a" msg))
          updater)]
       [,annotated-code
        (let* ([source-table (doc:source-table doc)]
