@@ -21,6 +21,7 @@
 ;;; DEALINGS IN THE SOFTWARE.
 
 (import
+ (config-params)
  (read)
  (software-info))
 
@@ -76,6 +77,39 @@
              (printf "~a: ~a\n" result expr)
              (throw `#(failed ,result ,expr))]))))
     (library-exports '(scheme)))
+   'ok))
+
+(isolate-mat definition-keywords ()
+  (define (annotated-defns str)
+    (let ([names '()])
+      (walk-defns (read-code str)
+        (lambda (name uid bfp efp)
+          (set! names (cons name names))))
+      (reverse names)))
+  (define (regexp-defns str)
+    (let ([names '()])
+      (walk-defns-re str
+        (lambda (name uid bfp efp)
+          (set! names (cons name names))))
+      (reverse names)))
+  ;; A configured keyword works like define: alone or with a -suffix,
+  ;; but not as the start of a longer name.
+  (define text
+    (ct:join #\newline
+      "(class foo 1)"
+      "(class-method (bar) 2)"
+      "(classify baz 3)"
+      "(defined? qux)"
+      "(definer quux)"))
+  (parameterize ([config:definition-keywords '("class")])
+    (match-let*
+     ([(foo bar) (annotated-defns text)]
+      [("foo" "bar") (regexp-defns text)])
+     'ok))
+  ;; A set! form doesn't make later set! forms match the patterns for
+  ;; define forms, so (set! (b c) 2) doesn't define b.
+  (match-let*
+   ([(a) (annotated-defns "(set! a 1)\n(set! (b c) 2)")])
    'ok))
 
 (isolate-mat walk-refs ()

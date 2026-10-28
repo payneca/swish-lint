@@ -42,6 +42,7 @@
    )
   (import
    (chezscheme)
+   (read)
    (swish imports)
    )
   (define $yield
@@ -639,8 +640,11 @@
        (put-token op first)
        (emit-tokens op rest)]))
 
+  (define prefixed-name-regexp (pregexp (format "^~a(.+)" primitive-prefix)))
+
+  ;; A primitive reference such as #%fx+ indents like the name itself.
   (define (lookup-indent name)
-    (let ([name (match (pregexp-match "#[23]%(.+)" name)
+    (let ([name (match (pregexp-match prefixed-name-regexp name)
                   [(,_ ,name) name]
                   [#f name])])
       (eq-hashtable-ref indent-table (string->symbol name) #f)))
