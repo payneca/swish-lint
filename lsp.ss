@@ -158,14 +158,16 @@
   (define (make-text-edit range text)
     (json:make-object [range range] [newText text]))
 
-  (define (make-progress token title render-msg)
+  ;; Unless created? is true, nothing is sent until progress:created.
+  (define (make-progress token title render-msg created?)
     (match (progress:start title render-msg
              (lambda (msg)
                (rpc:fire-event "$/progress"
                  (json:make-object
                   [token token]
                   [value msg])))
-             trace-expr)
+             trace-expr
+             created?)
       [#(ok ,pid) pid]
       [#(error ,reason)
        (trace-expr `(make-progress => ,(exit-reason->english reason)))
@@ -878,26 +880,58 @@
     (define (open-doc? uri state)
       (ht:ref ($state uri->doc) uri #f))
 
+    ;; path is a capability's path in the client's initialize params.
+    (define (client-supports? path state)
+      (let ([cap ($state client-cap)])
+        (and cap (eq? (json:ref cap path #f) #t))))
+
+    ;; Progress is reported only if the client supports it, with a token
+    ;; the client creates. Indexing doesn't wait for the client: the
+    ;; progress messages wait instead, and are dropped if the client
+    ;; refuses the token.
+    (define (start-progress state)
+      (cond
+       [(client-supports? '(window workDoneProgress) state)
+        (let* ([token (string-append "enumerate-directories-"
+                        (gensym->unique-string (gensym)))]
+               [progress (make-progress token
+                           "Analyze files"
+                           (lambda (done total)
+                             (format "~a/~a files" done total))
+                           #f)]
+               [id (gensym->unique-string (gensym))])
+          (rpc:request id "window/workDoneProgress/create"
+            (json:make-object [token token]))
+          (values progress
+            ($state copy
+              [requests
+               (ht:set ($state requests) id
+                 (lambda (msg state)
+                   (when progress
+                     (if (json:ref msg 'error #f)
+                         (progress:not-created progress)
+                         (progress:created progress)))
+                   state))])))]
+       [else (values #f state)]))
+
     (define (index-files files state)
-      (let ([progress (make-progress "enumerate-directories"
-                        "Analyze files"
-                        (lambda (done total)
-                          (format "~a/~a files" done total)))]
-            [uris (filter (lambda (uri) (not (open-doc? uri state)))
-                    (map abs-path->uri files))])
-        (cond
-         [(null? uris)
-          ;; This is necessary for testing code that
-          ;; depends on the progress events.
-          (progress:inc-total progress)
-          (progress:inc-done progress)
-          state]
-         [else
-          (fold-left
-           (lambda (state uri)
-             (index-file uri progress state))
-           state
-           uris)])))
+      (let-values ([(progress state) (start-progress state)])
+        (let ([uris (filter (lambda (uri) (not (open-doc? uri state)))
+                      (map abs-path->uri files))])
+          (cond
+           [(null? uris)
+            ;; This is necessary for testing code that
+            ;; depends on the progress events.
+            (when progress
+              (progress:inc-total progress)
+              (progress:inc-done progress))
+            state]
+           [else
+            (fold-left
+             (lambda (state uri)
+               (index-file uri progress state))
+             state
+             uris)]))))
 
     (define (updated uri change version skip-delay? state)
       (let* ([old (ht:ref ($state uri->doc) uri #f)]
@@ -1153,6 +1187,9 @@
            (cond
             [(eq? semtok-mode ($state semtok-mode))
              state]
+            [(not (client-supports? '(workspace semanticTokens refreshSupport)
+                    state))
+             ($state copy [semtok-mode semtok-mode])]
             [else
              (let ([id (gensym->unique-string (gensym))])
                (rpc:request id

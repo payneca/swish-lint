@@ -55,13 +55,15 @@
                [message (json:ref value 'message #f)]
                [percentage (json:ref value 'percentage #f)]))))
     self)
-  ;; Returns #f if progress doesn't begin within timeout.
+  ;; Waits for progress whose token starts with prefix, since each run
+  ;; gets its own token. Returns #f if it doesn't begin within timeout.
   (letrec ([wait
             (case-lambda
-             [(token) (wait token 'infinity)]
-             [(token timeout)
+             [(prefix) (wait prefix 'infinity)]
+             [(prefix timeout)
               (receive (after timeout #f)
-                [`(<progress> ,@token [kind "begin"] ,percentage)
+                [`(<progress> ,token [kind "begin"] ,percentage)
+                 (guard (starts-with? token prefix))
                  (let lp ([prior percentage])
                    (receive
                     [`(<progress> ,@token [kind "end"]) 'ok]
@@ -97,6 +99,14 @@
     (receive (after timeout #f)
       [`(<diagnostics> ,@uri ,diagnostics) diagnostics])))
 
+;; What the test client tells the server it supports.
+(define (client-capabilities)
+  (json:make-object
+   [window (json:make-object [workDoneProgress #t])]
+   [workspace
+    (json:make-object
+     [semanticTokens (json:make-object [refreshSupport #t])])]))
+
 (define (start-lsp-server path)
   (start-lsp-server* path #t))
 
@@ -115,7 +125,7 @@
           (cond
            [(and path (format "file://~a" path))]
            [else json-null])]
-         [capabilities (json:make-object)])]))
+         [capabilities (client-capabilities)])]))
     (rpc-client:notify rpc
       (json:make-object
        [jsonrpc "2.0"]
@@ -426,6 +436,67 @@
            [params (json:make-object)])))
       ;; The test client reports a response to an id it didn't send.
       (assert (string=? "" (get-output-string os))))))
+
+;; Initializes rpc for the current directory, declaring capabilities, and
+;; reports each progress token creation, $/progress, and semantic token
+;; refresh to self, in order.
+(define (initialize-and-watch rpc capabilities)
+  (rpc-client:set-event-handler rpc 'watch
+    (lambda (event)
+      (match (json:ref event 'method #f)
+        ["window/workDoneProgress/create"
+         `#(create ,(json:get event '(params token)))]
+        ["$/progress"
+         `#(progress ,(json:get event '(params token))
+             ,(json:get event '(params value kind)))]
+        ["workspace/semanticTokens/refresh" '#(refresh)]
+        [,_ #f]))
+    self)
+  (rpc-client:call rpc
+    (json:make-object
+     [jsonrpc "2.0"]
+     [method "initialize"]
+     [params
+      (json:make-object
+       [rootUri (format "file://~a" (get-real-path "."))]
+       [capabilities capabilities])]))
+  (rpc-client:notify rpc
+    (json:make-object
+     [jsonrpc "2.0"]
+     [method "initialized"]
+     [params (json:make-object)])))
+
+(isolate-mat progress-token ()
+  ;; Progress uses a token the client created first.
+  (let ([rpc (start-uninitialized-lsp-server)])
+    (on-exit (stop-lsp-server rpc)
+      (initialize-and-watch rpc (client-capabilities))
+      (receive (after 5000 (throw 'no-create))
+        [#(create ,token)
+         (receive (after 5000 (throw 'no-begin))
+           [#(progress ,@token "begin") 'ok])
+         (receive (after 5000 (throw 'no-end))
+           [#(progress ,@token "end") 'ok])]))))
+
+(isolate-mat no-client-capabilities ()
+  ;; Without the capabilities, there's no progress and no refresh.
+  (let ([rpc (start-uninitialized-lsp-server)])
+    (on-exit (stop-lsp-server rpc)
+      (initialize-and-watch rpc (json:make-object))
+      (rpc-client:notify rpc
+        (json:make-object
+         [jsonrpc "2.0"]
+         [method "workspace/didChangeConfiguration"]
+         [params
+          (json:make-object
+           [settings
+            (json:make-object
+             [swish (json:make-object [semtok-mode "no-modifiers"])])])]))
+      (receive (after 1000 'ok)
+        [,msg
+         (guard (and (vector? msg)
+                     (memq (vector-ref msg 0) '(create progress refresh))))
+         (throw `#(unexpected ,msg))]))))
 
 (isolate-mat json-rpc-uninitialized ()
   (let ([rpc (start-uninitialized-lsp-server)])
