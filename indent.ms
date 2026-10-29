@@ -670,6 +670,36 @@
     "#'(body ...)])"))
   )
 
+(indent-mat column-after-tokens ()
+  ;; After a string that spans lines, the column comes from its last
+  ;; line.
+  (check-indent
+   (code
+    "(define msg \"first"
+    "second\" (list 1"
+    "          a))")
+   (code
+    "(define msg \"first"
+    "second\" (list 1"
+    "a))"))
+  ;; A block comment moves the column like any other text on the line.
+  (check-indent
+   (code
+    "(foo #| x |# (bar 1"
+    "               a))")
+   (code
+    "(foo #| x |# (bar 1"
+    "a))"))
+  (check-indent
+   (code
+    "(foo #| x"
+    "y |# (bar 1"
+    "       a))")
+   (code
+    "(foo #| x"
+    "y |# (bar 1"
+    "a))")))
+
 (indent-mat top-level-whitespace ()
   ;; Indenting a whole file moves a top-level form to column 0, as Emacs
   ;; does.
@@ -1364,6 +1394,20 @@
        (spaces m "; align prior"))))
    '(0 10 20 30 40 50 60 70 80)
    '(80 70 60 50 40 30 20 10 0))
+
+  ;; A comment after a multi-line string or |symbol| is aligned from
+  ;; where the token ends, not from its whole length.
+  (check-indent
+   (code
+    "(define x \"abc"
+    (string-append "def\")" (make-string 35 #\space) "; comment")
+    "(define z |a"
+    (string-append "b|)" (make-string 37 #\space) "; comment"))
+   (code
+    "(define x \"abc"
+    "def\") ; comment"
+    "(define z |a"
+    "b|) ; comment"))
   )
 
 (indent-mat block-comments ()
