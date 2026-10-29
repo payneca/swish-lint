@@ -457,7 +457,7 @@
            (set! column
              (if (eq? (token-type t) 'eol)
                  0
-                 (+ column (token-length t))))]
+                 (column-after column (token-raw t))))]
           [get-column column]
           [get-all
            (let ([result (reverse ls)])
@@ -679,6 +679,16 @@
     [(! @ $ % ^ & : ? ~ _) scheme-normal-indent]
     )
 
+  ;; The column after text that starts at column. If text spans lines,
+  ;; that's the length of its last line.
+  (define (column-after column text)
+    (let ([len (string-length text)])
+      (let lp ([i (fx- len 1)])
+        (cond
+         [(fx< i 0) (+ column len)]
+         [(eqv? (string-ref text i) #\newline) (fx- len (fx+ i 1))]
+         [else (lp (fx- i 1))]))))
+
   (define (emit-whitespace op n)
     (when (> n 0)
       (let ([raw (make-string n #\space)])
@@ -788,8 +798,20 @@
            (s1 (get-token ip) indent rlevels)]
           [(eq? type 'lblock-comment)
            (put-token op t)
-           (emit-tokens op (block-tokens ip '() reverse))
-           (s1 (get-token ip) indent rlevels)]
+           ;; A newline in a block comment is always its own eol token,
+           ;; so the column after the comment counts only the tokens
+           ;; after the last one.
+           (let* ([rev (block-tokens ip '() values)]
+                  [column
+                   (let lp ([ls rev] [n 0])
+                     (match ls
+                       [() (+ (column-after indent (token-raw t)) n)]
+                       [(,c . ,rest)
+                        (if (eq? (token-type c) 'eol)
+                            n
+                            (lp rest (+ n (token-length c))))]))])
+             (emit-tokens op (reverse rev))
+             (s1 (get-token ip) column rlevels))]
           [(token-open? t)
            (put-token op t)
            (let* ([indent (+ indent (token-length t))]
@@ -818,7 +840,7 @@
           [else
            (put-token op t)
            (s1 (get-token ip)
-             (+ indent (token-length t))
+             (column-after indent (token-raw t))
              (increment-subform-count rlevels))]))
 
       (define (atom-on-line? first ip)
@@ -882,7 +904,7 @@
                 (has-prop? t 'right-column-whitespace))
            (lp line code-end line-comment? line-comment-length)]
           [else
-           (lp line (+ code-end (token-length t)) line-comment? line-comment-length)]))))
+           (lp line (column-after code-end (token-raw t)) line-comment? line-comment-length)]))))
 
   (define (build-anchors markers)
     (define ht (make-eq-hashtable))
