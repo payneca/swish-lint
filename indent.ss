@@ -700,7 +700,11 @@
                   [#f name])])
       (eq-hashtable-ref indent-table (string->symbol name) #f)))
 
-  (define (indent-code tokens)
+  ;; at-file-start? says whether the tokens start at the top of the file.
+  ;; If so, a top-level form goes to column 0. If not, a top-level line
+  ;; keeps its indentation, since it may be inside a form that starts
+  ;; above the tokens, and the lines below are indented relative to it.
+  (define (indent-code tokens at-file-start?)
     (let* ([tokens (mark-whitespace (make-token-port tokens))]
            [ip (make-token-port tokens)]
            [op (make-token-output-port)])
@@ -753,7 +757,10 @@
              (start-new-line rlevels)]
             [(eq? type 'ws)
              (s0
-              (if (has-prop? t 'with-code-whitespace)
+              (if (or (has-prop? t 'with-code-whitespace)
+                      (and at-file-start?
+                           (null? rlevels)
+                           (has-prop? t 'leading-whitespace)))
                   indent
                   (+ indent (token-length t)))
               rlevels)]
@@ -969,8 +976,8 @@
              [tokens (mark (make-token-port tokens))])
         tokens)]))
 
-  (define (indent-tokens tokens)
-    (let* ([tokens (indent-code tokens)]
+  (define (indent-tokens tokens at-file-start?)
+    (let* ([tokens (indent-code tokens at-file-start?)]
            [tokens (indent-comments tokens)])
       tokens))
 
@@ -990,9 +997,20 @@
      [(text)
       (indent text 1 (most-positive-fixnum))]
      [(text start-line1 end-line1)
-      (tokens->string (indent-tokens (tokenize text start-line1 end-line1)))]))
+      (tokens->string
+       (indent-tokens (tokenize text start-line1 end-line1)
+         (= start-line1 1)))]))
 
-  (define (fold-indent text start-line1 end-line1 init proc)
+  ;; Unless at-file-start? is given, text is the whole file, so it's
+  ;; true when indenting starts at line 1.
+  (define fold-indent
+    (case-lambda
+     [(text start-line1 end-line1 init proc)
+      (fold-indent text start-line1 end-line1 init proc (= start-line1 1))]
+     [(text start-line1 end-line1 init proc at-file-start?)
+      ($fold-indent text start-line1 end-line1 init proc at-file-start?)]))
+
+  (define ($fold-indent text start-line1 end-line1 init proc at-file-start?)
     ;; [start-line1, end-line1] inclusive
     (define (fp->line1 fp)
       (do ([i 0 (fx+ i 1)]
@@ -1009,7 +1027,7 @@
               [(,t . ,_) (min start-line1 (fp->line1 (token-bfp t)))])]
            [src-port (open-input-string text)]
            [dst-port (open-input-string
-                      (tokens->string (indent-tokens tokens)))])
+                      (tokens->string (indent-tokens tokens at-file-start?)))])
       (do ([i 1 (+ i 1)]) ((= i first-line1))
         (get-line src-port))
       (let lp ([line first-line1] [acc init])
