@@ -304,8 +304,48 @@
                [else
                 (lp (fx+ next 1))]))]))]))
     (define (gen-tokens)
-      (let ([ip (open-input-string text)]
-            [end (string-length text)])
+      (define end (string-length text))
+      ;; When read-token fails on a string, as on an escape it rejects,
+      ;; find the string by its quotes alone: from its opening quote to
+      ;; the next quote that a backslash doesn't escape. Returns the
+      ;; string's bfp and efp, or #f #f. The string may follow
+      ;; whitespace and comments, which read-token skips.
+      (define (failed-string start)
+        (define (char-at i) (and (fx< i end) (string-ref text i)))
+        (define (skip-line i)
+          (if (or (fx>= i end) (eqv? (char-at i) #\newline))
+              i
+              (skip-line (fx+ i 1))))
+        (define (skip-block i depth)
+          (cond
+           [(fx>= i end) #f]
+           [(and (eqv? (char-at i) #\|) (eqv? (char-at (fx+ i 1)) #\#))
+            (if (fx= depth 1)
+                (fx+ i 2)
+                (skip-block (fx+ i 2) (fx- depth 1)))]
+           [(and (eqv? (char-at i) #\#) (eqv? (char-at (fx+ i 1)) #\|))
+            (skip-block (fx+ i 2) (fx+ depth 1))]
+           [else (skip-block (fx+ i 1) depth)]))
+        (define (closing-quote i)
+          (match (char-at i)
+            [#f #f]
+            [#\\ (closing-quote (fx+ i 2))]
+            [#\" (fx+ i 1)]
+            [,_ (closing-quote (fx+ i 1))]))
+        (let skip ([i start])
+          (let ([c (char-at i)])
+            (cond
+             [(not c) (values #f #f)]
+             [(char-whitespace? c) (skip (fx+ i 1))]
+             [(eqv? c #\;) (skip (skip-line i))]
+             [(and (eqv? c #\#) (eqv? (char-at (fx+ i 1)) #\|))
+              (let ([j (skip-block (fx+ i 2) 1)])
+                (if j (skip j) (values #f #f)))]
+             [(eqv? c #\")
+              (let ([j (closing-quote (fx+ i 1))])
+                (if j (values i j) (values #f #f)))]
+             [else (values #f #f)]))))
+      (let ([ip (open-input-string text)])
         (when (and (fx> end 2)
                    (eq? (string-ref text 0) #\#)
                    (eq? (string-ref text 1) #\!)
@@ -347,17 +387,28 @@
                      (gen-ext-tokens prior-efp efp err)
                      (lp efp))]
                   [else
-                   ;; Advance the port to the next whitespace
-                   ;; character, attempt to parse the failed
-                   ;; characters as extended tokens and continue.
-                   (let lp ()
-                     (let ([c (get-char ip)])
-                       (if (or (eof-object? c) (char-whitespace? c))
-                           (unget-char ip c)
-                           (lp))))
-                   (let ([efp (port-position ip)])
-                     (gen-ext-tokens prior-efp efp err)
-                     (lp efp))]))]
+                   (let-values ([(bfp efp) (failed-string prior-efp)])
+                     (cond
+                      [bfp
+                       ;; Keep the string whole, so the code after it
+                       ;; stays code, and continue after it.
+                       (gen-ext-tokens prior-efp bfp #f)
+                       (yield+ (build-token 'atomic (substring text bfp efp)
+                                 bfp efp err (token-prop string)))
+                       (set-port-position! ip efp)
+                       (lp efp)]
+                      [else
+                       ;; Advance the port to the next whitespace
+                       ;; character, attempt to parse the failed
+                       ;; characters as extended tokens and continue.
+                       (let lp ()
+                         (let ([c (get-char ip)])
+                           (if (or (eof-object? c) (char-whitespace? c))
+                               (unget-char ip c)
+                               (lp))))
+                       (let ([efp (port-position ip)])
+                         (gen-ext-tokens prior-efp efp err)
+                         (lp efp))]))]))]
               [,efp (lp efp)])))))
     (arg-check 'open-token-string
       [text string?]
