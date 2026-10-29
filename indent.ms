@@ -670,6 +670,36 @@
     "#'(body ...)])"))
   )
 
+(indent-mat column-after-tokens ()
+  ;; After a string that spans lines, the column comes from its last
+  ;; line.
+  (check-indent
+   (code
+    "(define msg \"first"
+    "second\" (list 1"
+    "          a))")
+   (code
+    "(define msg \"first"
+    "second\" (list 1"
+    "a))"))
+  ;; A block comment moves the column like any other text on the line.
+  (check-indent
+   (code
+    "(foo #| x |# (bar 1"
+    "               a))")
+   (code
+    "(foo #| x |# (bar 1"
+    "a))"))
+  (check-indent
+   (code
+    "(foo #| x"
+    "y |# (bar 1"
+    "       a))")
+   (code
+    "(foo #| x"
+    "y |# (bar 1"
+    "a))")))
+
 (indent-mat top-level-whitespace ()
   ;; Indenting a whole file moves a top-level form to column 0, as Emacs
   ;; does.
