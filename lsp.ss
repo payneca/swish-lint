@@ -523,7 +523,10 @@
                                (make-pos line (max olen nlen)))
                               new)
                              acc))
-                          acc))))))))))
+                          acc)))
+                  ;; The text starts at start-line1, not the top of the
+                  ;; file, so its first line keeps its indentation.
+                  #f)))))))
 
   (define (get-semantic-tokens doc uri range semtok-mode)
     (trace-time 'semantic-tokens
