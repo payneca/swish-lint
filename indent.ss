@@ -692,6 +692,16 @@
     [(! @ $ % ^ & : ? ~ _) scheme-normal-indent]
     )
 
+  ;; The column after text that starts at column. If text spans lines,
+  ;; that's the length of its last line.
+  (define (column-after column text)
+    (let ([len (string-length text)])
+      (let lp ([i (fx- len 1)])
+        (cond
+         [(fx< i 0) (+ column len)]
+         [(eqv? (string-ref text i) #\newline) (fx- len (fx+ i 1))]
+         [else (lp (fx- i 1))]))))
+
   (define (emit-whitespace op n)
     (when (> n 0)
       (let ([raw (make-string n #\space)])
@@ -801,8 +811,13 @@
            (s1 (get-token ip) indent rlevels)]
           [(eq? type 'lblock-comment)
            (put-token op t)
-           (emit-tokens op (block-tokens ip))
-           (s1 (get-token ip) indent rlevels)]
+           (let ([comment (block-tokens ip)])
+             (emit-tokens op comment)
+             (s1 (get-token ip)
+               (fold-left (lambda (column t) (column-after column (token-raw t)))
+                 (column-after indent (token-raw t))
+                 comment)
+               rlevels))]
           [(token-open? t)
            (put-token op t)
            (let* ([indent (+ indent (token-length t))]
@@ -831,7 +846,7 @@
           [else
            (put-token op t)
            (s1 (get-token ip)
-             (+ indent (token-length t))
+             (column-after indent (token-raw t))
              (increment-subform-count rlevels))]))
 
       (define (atom-on-line? first ip)
