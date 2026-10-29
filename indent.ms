@@ -670,6 +670,27 @@
     "#'(body ...)])"))
   )
 
+(indent-mat top-level-whitespace ()
+  ;; Indenting a whole file moves a top-level form to column 0, as Emacs
+  ;; does.
+  (check-indent
+   (code
+    "(define x 1)"
+    "(define y"
+    "  2)")
+   (code
+    "   (define x 1)"
+    "(define y"
+    "2)"))
+  ;; Indenting from a later line keeps the first line where it is, since
+  ;; it may be inside a form that starts above it.
+  (match-let*
+   ([("     (foo" "      bar)")
+     (reverse
+      (fold-indent (code "(let ()" "     (foo" "bar)") 2 3 '()
+        (lambda (line old new acc) (cons new acc))))])
+   'ok))
+
 (indent-mat normal-keywords ()
   (for-each
    (lambda (kw)
