@@ -567,11 +567,25 @@
              (let ([comment (line-tokens tp)])
                (lp armed? depth
                  (fold-right cons (cons t acc) (reverse comment))))]
+            [(eq? type 'lblock-comment)
+             ;; As the reader does, skip a block comment; it isn't the
+             ;; datum.
+             (let ([comment (block-tokens tp)])
+               (lp armed? depth
+                 (fold-right cons (cons t acc) (reverse comment))))]
+            [(and (eq? type 'quote) (eq? (token-value t) 'datum-comment))
+             ;; A nested #; and the datum it comments out aren't the
+             ;; datum either.
+             (let ([skipped (expr-tokens tp)])
+               (lp armed? depth
+                 (fold-right cons (cons t acc) (reverse skipped))))]
             [(token-open? t)
              (lp #t (+ depth 1) (cons t acc))]
             [(token-close? t)
              (lp armed? (- depth 1) (cons t acc))]
-            [(eq? type 'quote)
+            [(memq type '(quote box mark))
+             ;; A prefix, such as ' or #& or #0=, belongs to the datum
+             ;; that follows it.
              (lp armed? depth (cons t acc))]
             [(or (eq? type 'eol)
                  (eq? type 'ws))
