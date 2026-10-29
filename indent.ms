@@ -1429,6 +1429,24 @@
    "#| a ; b |# c")
   )
 
+(indent-mat datum-comment-extent ()
+  ;; #; comments out the same datum the reader does: it skips block
+  ;; comments and nested #; datums, and includes prefixes such as #&.
+  (define (commented text)
+    (map token-raw
+      (filter
+       (lambda (t)
+         (and (has-prop? t 'comment)
+              (not (memq (token-type t) '(ws eol)))))
+       (tokenize text))))
+  (match-let*
+   ([("#;" "#|" "c" "|#" "x") (commented "#; #| c |# x y")]
+    [("#;" "#;" "a" "b") (commented "#; #; a b c")]
+    [("#;" "#&" "x") (commented "#;#&x y")]
+    [("#;" "#0=" "x") (commented "#;#0=x y")]
+    [("#;" "(" "a" ")") (commented "#; (a) x")])
+   'ok))
+
 (indent-mat datum-comments ()
 
   (check-indent
