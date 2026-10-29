@@ -22,35 +22,56 @@
 
 (library (progress)
   (export
+   progress:created
    progress:inc-done
    progress:inc-total
+   progress:not-created
    progress:start
    )
   (import
    (chezscheme)
    (swish imports)
    )
-  (define (progress:start title render-msg send-msg trace-expr)
+  ;; Unless created? is false, the client already knows the progress
+  ;; token. Otherwise messages wait until progress:created, or are
+  ;; dropped after progress:not-created.
+  (define progress:start
+    (case-lambda
+     [(title render-msg send-msg trace-expr)
+      (progress:start title render-msg send-msg trace-expr #t)]
+     [(title render-msg send-msg trace-expr created?)
+      (start title render-msg send-msg trace-expr created?)]))
+
+  (define (start title render-msg send-msg trace-expr created?)
     (define-state-tuple <progress>
       start-time
       wake-time
       max-reported
       total
       done
+      pending                  ; created | dropped | queue of messages
       )
     (define (no-reply state)
       `#(no-reply ,state ,(or ($state wake-time) 'infinity)))
     (define (wake-at old)
       (or old (+ (erlang:now) 100)))
-    (define (start-at old)
-      (or old
-          (begin
-            (send-msg
-             (json:make-object
-              [kind "begin"]
-              [title title]
-              [percentage 0]))
-            (erlang:now))))
+    ;; Sends msg, or keeps it until the token is created. Returns the
+    ;; new state.
+    (define (emit msg state)
+      (match ($state pending)
+        [created (send-msg msg) state]
+        [dropped state]
+        [,waiting ($state copy [pending (queue:add msg waiting)])]))
+    (define (started state)
+      (if ($state start-time)
+          state
+          (let ([state (emit
+                        (json:make-object
+                         [kind "begin"]
+                         [title title]
+                         [percentage 0])
+                        state)])
+            ($state copy [start-time (erlang:now)]))))
 
     (define (init)
       `#(ok
@@ -59,27 +80,40 @@
             [wake-time #f]
             [max-reported 0]
             [total 0]
-            [done 0])))
+            [done 0]
+            [pending (if created? 'created queue:empty)])))
     (define (terminate reason state)
       ($state open [start-time])
       (when start-time
-        (send-msg (json:make-object [kind "end"]))
+        (emit (json:make-object [kind "end"]) state)
         (trace-expr `(time ,title ,(- (erlang:now) start-time) ms))))
     (define (handle-call msg from state) (match msg))
     (define (handle-cast msg state)
       (match msg
         [inc-total
-         (no-reply
-          ($state copy*
-            [start-time (start-at start-time)]
-            [wake-time (wake-at wake-time)]
-            [total (fx+ total 1)]))]
+         (let ([state (started state)])
+           (no-reply
+            ($state copy*
+              [wake-time (wake-at wake-time)]
+              [total (fx+ total 1)])))]
         [inc-done
-         (no-reply
-          ($state copy*
-            [start-time (start-at start-time)]
-            [wake-time (wake-at wake-time)]
-            [done (fx+ done 1)]))]))
+         (let ([state (started state)])
+           (no-reply
+            ($state copy*
+              [wake-time (wake-at wake-time)]
+              [done (fx+ done 1)])))]
+        [created
+         (match ($state pending)
+           [created (no-reply state)]
+           [dropped (no-reply state)]
+           [,waiting
+            (let lp ([q waiting])
+              (unless (queue:empty? q)
+                (send-msg (queue:get q))
+                (lp (queue:drop q))))
+            (no-reply ($state copy [pending 'created]))])]
+        [not-created
+         (no-reply ($state copy [pending 'dropped]))]))
     (define (handle-info msg state)
       (match msg
         [timeout
@@ -91,12 +125,13 @@
                           (if (zero? total)
                               0
                               (floor (* (/ done total) 100)))))])
-           (send-msg
-            (json:make-object
-             [kind "report"]
-             [message msg]
-             [percentage percent]))
-           (let ([state ($state copy [max-reported percent] [wake-time #f])])
+           (let* ([state (emit
+                          (json:make-object
+                           [kind "report"]
+                           [message msg]
+                           [percentage percent])
+                          state)]
+                  [state ($state copy [max-reported percent] [wake-time #f])])
              (if (< done total)
                  (no-reply state)
                  `#(stop normal ,state))))]))
@@ -107,4 +142,10 @@
 
   (define (progress:inc-done who)
     (gen-server:cast who 'inc-done))
+
+  (define (progress:created who)
+    (gen-server:cast who 'created))
+
+  (define (progress:not-created who)
+    (gen-server:cast who 'not-created))
   )
