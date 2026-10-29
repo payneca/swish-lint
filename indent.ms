@@ -243,6 +243,33 @@
       '((lparen "(") (atomic "foo") (rparen ")"))))
   )
 
+(indent-mat string-recovery ()
+  ;; A string with an escape the reader rejects still ends at its
+  ;; closing quote, so the code after it stays code.
+  (define (check text expected)
+    (let ([actual (map (lambda (t) (list (token-type t) (token-raw t)))
+                    (tokenize text))])
+      (unless (equal? expected actual)
+        (throw `(tokenize-failed ,text
+                  (expected ,expected)
+                  (actual ,actual))))))
+  (check
+   (code
+    "(define p \"C:\\Users x\")"
+    "(foo \"ok\")")
+   '((lparen "(") (atomic "define") (ws " ") (atomic "p") (ws " ")
+     (atomic "\"C:\\Users x\"") (rparen ")") (eol "\n")
+     (lparen "(") (atomic "foo") (ws " ") (atomic "\"ok\"") (rparen ")")))
+  ;; A backslash still escapes the next character, even a quote.
+  (check "(f \"a\\U \\\" b\" c)"
+    '((lparen "(") (atomic "f") (ws " ") (atomic "\"a\\U \\\" b\"")
+      (ws " ") (atomic "c") (rparen ")")))
+  ;; With no closing quote, the earlier recovery still covers the text.
+  (let ([text "(f \"a\\U b"])
+    (assert
+     (string=? text
+       (apply string-append (map token-raw (tokenize text)))))))
+
 (indent-mat non-keywords ()
   (check-indent
    (code
