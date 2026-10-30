@@ -473,7 +473,8 @@
         [os (open-output-string)])
     (on-exit (stop-lsp-server rpc)
       (parameterize ([console-error-port os])
-        (send (whereis 'lsp-server) `#(request-finished ,self 9999 #f))
+        (send (whereis 'lsp-server)
+          `#(request-finished ,self 9999 #f ,(json:make-object)))
         ;; This response comes after any response to 9999.
         (rpc-client:call rpc
           (json:make-object
@@ -543,6 +544,34 @@
          (guard (and (vector? msg)
                      (memq (vector-ref msg 0) '(create progress refresh))))
          (throw `#(unexpected ,msg))]))))
+
+(isolate-mat request-timing ()
+  ;; A request that is answered is timed and logged in the tower. One
+  ;; that finishes after it was cancelled isn't.
+  (define (wait-for-requests)
+    (let lp ([tries 0])
+      (match (transaction 'log-db
+               (execute "select method, filename from requests"))
+        [() (if (< tries 300)
+                (receive (after 10 (lp (+ tries 1))))
+                (throw 'no-requests-logged))]
+        [,rows rows])))
+  (let ([rpc (start-lsp-server #f)])
+    (on-exit (stop-lsp-server rpc)
+      (define wait-for-test-sync (capture-test-sync))
+      (let ([uri "file:///tmp/timing.ss"])
+        (did-open uri (code "(define (timed) 1)" "(timed)" ""))
+        (wait-for-test-sync uri)
+        (send (whereis 'lsp-server)
+          `#(request-finished ,self 9999 #f
+              ,(json:make-object
+                [method "late"]
+                [start (erlang:now)]
+                [total 0])))
+        (assert (pair? (get-definitions uri 1 2)))
+        (match-let*
+         ([(#("textDocument/definition" "/tmp/timing.ss")) (wait-for-requests)])
+         (did-close uri))))))
 
 (isolate-mat json-rpc-uninitialized ()
   (let ([rpc (start-uninitialized-lsp-server)])

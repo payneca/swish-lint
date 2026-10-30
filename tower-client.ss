@@ -31,6 +31,7 @@
    tower-client:get-local-references
    tower-client:get-references
    tower-client:log
+   tower-client:log-request
    tower-client:reset-directory
    tower-client:shutdown-server
    tower-client:start&link
@@ -134,7 +135,32 @@
       id
       id-map                            ; id -> from
       root-dir                          ; #f | directory last reset
+      pending                           ; queue of timings to log
+      flush-time                        ; infinity | when to send
       )
+    (define (reply x state)
+      `#(reply ,x ,state ,($state flush-time)))
+    (define (no-reply state)
+      `#(no-reply ,state ,($state flush-time)))
+    ;; Send the pending request timings in one message, so that every
+    ;; request doesn't cost the tower a message of its own. They are
+    ;; dropped if there is no connection.
+    (define (send-pending state)
+      (let ([ws ($state ws)]
+            [pending ($state pending)])
+        (when (and ws (not (queue:empty? pending)))
+          (ws:send ws
+            (json:object->bytevector
+             (json:make-object
+              [method "log-requests"]
+              [params
+               (json:make-object
+                [requests
+                 (let lp ([q pending])
+                   (if (queue:empty? q)
+                       '()
+                       (cons (queue:get q) (lp (queue:drop q)))))])]))))
+        ($state copy [pending queue:empty] [flush-time 'infinity])))
     (define (try-connect)
       (match (try (ws:connect "localhost" port-number "/tower" self))
         [`(catch ,_) #f]
@@ -202,42 +228,54 @@
                [ws #f]
                [id 0]
                [id-map (ht:make values eq? fixnum?)]
-               [root-dir #f])))
+               [root-dir #f]
+               [pending queue:empty]
+               [flush-time 'infinity])))
     (define (terminate reason state)
-      (ws:close ($state ws)))
+      ;; Don't connect, which could launch a tower.
+      (let ([state (send-pending state)])
+        (ws:close ($state ws))))
     (define (handle-call msg from state)
       (match msg
         [#(call ,msg)
          (match (try (connect state))
            [`(catch ,reason ,err)
-            `#(reply ,err ,state)]
+            (reply err state)]
            [,state
             (let ([id (+ ($state id) 1)])
               (json:set! msg 'id id)
               (ws:send ($state ws) (json:object->bytevector msg))
-              `#(no-reply
-                 ,($state copy
-                    [id id]
-                    [id-map (ht:set ($state id-map) id from)])))])]
+              (no-reply
+               ($state copy
+                 [id id]
+                 [id-map (ht:set ($state id-map) id from)])))])]
         [disconnect
          (let ([ws ($state ws)])
            (when ws (ws:close ws))
-           `#(reply ok ,(disconnected state)))]))
+           (reply 'ok (disconnected state)))]))
     (define (handle-cast msg state)
       (match msg
         [#(cast ,msg)
          (match (try (connect state))
            [`(catch ,_)
-            `#(no-reply ,state)]
+            (no-reply state)]
            [,state
             (ws:send ($state ws) (json:object->bytevector msg))
-            `#(no-reply ,state)])]
+            (no-reply state)])]
+        [#(log-request ,record)
+         (no-reply
+          ($state copy
+            [pending (queue:add record ($state pending))]
+            [flush-time
+             (if (eq? ($state flush-time) 'infinity)
+                 (+ (erlang:now) 1000)
+                 ($state flush-time))]))]
         [#(reset-directory ,dir)
          ;; Keep dir even if the tower can't be reached. The next
          ;; connection resets it and calls on-reconnect.
          (match (try (connect state))
            [`(catch ,_)
-            `#(no-reply ,($state copy [root-dir dir]))]
+            (no-reply ($state copy [root-dir dir]))]
            [,state
             ;; Without an id, the tower sends no reply.
             (ws:send ($state ws)
@@ -245,7 +283,7 @@
                (json:make-object
                 [method "reset-directory"]
                 [params (json:make-object [directory dir])])))
-            `#(no-reply ,($state copy [root-dir dir]))])]))
+            (no-reply ($state copy [root-dir dir]))])]))
     (define (handle-info msg state)
       (match msg
         [#(ws:message ,ws ,message)
@@ -258,7 +296,7 @@
               (json:write (console-error-port) msg 0)
               (newline (console-error-port))
               (flush-output-port (console-error-port))
-              `#(no-reply ,state)]
+              (no-reply state)]
              [,id
               (match (ht:ref ($state id-map) id #f)
                 [#f
@@ -266,24 +304,34 @@
                  (json:write (console-error-port) msg 0)
                  (newline (console-error-port))
                  (flush-output-port (console-error-port))
-                 `#(no-reply ,state)]
+                 (no-reply state)]
                 [,from
                  (let ([reply (rpc-reply msg)]
                        [state ($state copy
                                 [id-map (ht:delete ($state id-map) id)])])
                    (gen-server:reply from reply)
-                   `#(no-reply ,state))])]))]
+                   (no-reply state))])]))]
         [#(ws:closed ,ws ,code ,reason)
-         `#(no-reply
-            ,(if (eq? ws ($state ws))
-                 (disconnected state)
-                 state))]
+         (no-reply
+          (if (eq? ws ($state ws))
+              (disconnected state)
+              state))]
         [#(ws:init ,ws)
-         `#(no-reply ,state)]))
+         (no-reply state)]
+        [timeout
+         (no-reply
+          (send-pending
+           (match (try (connect state))
+             [`(catch ,_) state]
+             [,state state])))]))
     (gen-server:start&link 'tower-client))
 
   (define (tower-client:call msg)
     (gen-server:call 'tower-client `#(call ,msg)))
+
+  ;; Queue a request's timing, a JSON object, for the tower.
+  (define (tower-client:log-request record)
+    (gen-server:cast 'tower-client `#(log-request ,record)))
 
   ;; Drop the connection. The next call reconnects.
   (define (tower-client:disconnect)

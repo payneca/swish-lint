@@ -168,6 +168,14 @@ substr(F.filename,-3)='.ss' desc, F.filename asc, D.line asc"
         (display message)
         (newline)])]))
 
+  ;; The sample standard deviation of count values, from their average
+  ;; and the average of their squares. SQLite here has no sqrt. Rounding
+  ;; can make the variance slightly negative, so it's at least 0.
+  (define (stddev count avg avg2)
+    (if (> count 1)
+        (sqrt (max 0 (* (- avg2 (* avg avg)) (/ count (- count 1)))))
+        0))
+
   (define (prefix-integer s)
     (if (string=? s "")
         0
@@ -189,7 +197,6 @@ substr(F.filename,-3)='.ss' desc, F.filename asc, D.line asc"
               ;; character, like #\esc
               [pat (string-append (pregexp-replace* "([_%])" prefix "\x1B;\\1") "%")]
               [root-fk (root-key)]
-              [start (erlang:now)]
               [rows
                (transaction 'log-db
                  (let ([file-fk (scalar (execute "select file_pk from files where filename=?" filename))]
@@ -242,24 +249,13 @@ order by distance is null, distance asc, count desc, candidates.name asc"
                         ;;[detail (format "| distance:~a | count:~a | sort: ~a | score: ~a" distance count sortText score)]
                         [sortText sortText]
                         [score score]))]))
-                rows)]
-              [end (erlang:now)]
-              [log (json:make-object
-                    [_op_ "get-completions"]
-                    [filename filename]
-                    [line line]
-                    [char char]
-                    [prefix prefix]
-                    [found (length completions)]
-                    [time (- end start)])])
-         (do-log 1 log)
+                rows)])
          (rpc:respond ws msg completions))]
       [get-definitions
        (let* ([filename (json:get msg '(params filename))]
               [line (json:get msg '(params line))]
               [char (json:get msg '(params char))]
               [root-fk (root-key)]
-              [start (erlang:now)]
               [defns
                (map
                 (lambda (row)
@@ -275,22 +271,12 @@ order by distance is null, distance asc, count desc, candidates.name asc"
                     (or ($defns-in-file uid filename)
                         ($defns-in-workspace uid root-fk)
                         ($defns-anywhere uid filename)
-                        '()))))]
-              [end (erlang:now)]
-              [log (json:make-object
-                    [_op_ "get-definitions"]
-                    [filename filename]
-                    [line line]
-                    [char char]
-                    [found (length defns)]
-                    [time (- end start)])])
-         (do-log 1 log)
+                        '()))))])
          (rpc:respond ws msg defns))]
       [get-local-references
        (let* ([filename (json:get msg '(params filename))]
               [line (json:get msg '(params line))]
               [char (json:get msg '(params char))]
-              [start (erlang:now)]
               [refs
                (map
                 (lambda (row)
@@ -301,23 +287,13 @@ order by distance is null, distance asc, count desc, candidates.name asc"
                       [char char]
                       [len len])]))
                 (transaction 'log-db
-                  ($refs-in-file line char filename)))]
-              [end (erlang:now)]
-              [log (json:make-object
-                    [_op_ "get-local-references"]
-                    [filename filename]
-                    [line line]
-                    [char char]
-                    [found (length refs)]
-                    [time (- end start)])])
-         (do-log 1 log)
+                  ($refs-in-file line char filename)))])
          (rpc:respond ws msg refs))]
       [get-references
        (let* ([filename (json:get msg '(params filename))]
               [line (json:get msg '(params line))]
               [char (json:get msg '(params char))]
               [root-fk (root-key)]
-              [start (erlang:now)]
               [refs
                (map
                 (lambda (row)
@@ -329,16 +305,7 @@ order by distance is null, distance asc, count desc, candidates.name asc"
                       [char char]
                       [len len])]))
                 (transaction 'log-db
-                  ($refs-in-workspace line char filename root-fk)))]
-              [end (erlang:now)]
-              [log (json:make-object
-                    [_op_ "get-references"]
-                    [filename filename]
-                    [line line]
-                    [char char]
-                    [found (length refs)]
-                    [time (- end start)])])
-         (do-log 1 log)
+                  ($refs-in-workspace line char filename root-fk)))])
          (rpc:respond ws msg refs))]
       [reset-directory
        (let* ([dir (json:get msg '(params directory))]
@@ -406,16 +373,18 @@ order by distance is null, distance asc, count desc, candidates.name asc"
                   (coerce (json:get ref 'char))
                   (coerce meta))))
             refs))
-         (unless (< (verbosity) 1)
-           (transaction 'log-db
-             (do-log 1
-               (json:make-object
-                [_op_ "update-references"]
-                [filename filename]
-                [definitions (scalar (execute "select count(*) from refs where type='defn'"))]
-                [references (scalar (execute "select count(*) from refs"))]
-                [time (- (erlang:now) start)]))))
          (rpc:respond ws msg "ok"))]
+      [log-requests
+       (let ([root-fk (root-key)])
+         (for-each
+          (lambda (r)
+            (db:log 'log-db "insert into requests(timestamp,root_fk,method,filename,total) values(?,?,?,?,?)"
+              (json:get r 'start)
+              (coerce root-fk)
+              (json:get r 'method)
+              (coerce (json:ref r 'filename #f))
+              (json:get r 'total)))
+          (json:get msg '(params requests))))]
       [shutdown
        (do-log 1 (json:make-object [_op_ "shutdown"]))
        (rpc:respond ws msg "ok")
@@ -543,8 +512,22 @@ order by distance is null, distance asc, count desc, candidates.name asc"
         [timestamp integer]
         [path text]
         [meta text])
+      ;; One row per LSP request, timed by the client: total is the ms
+      ;; its worker took.
+      (create-table requests
+        [timestamp integer]
+        [root_fk integer]
+        [method text]
+        [filename text]
+        [total integer])
 
       (create-prune-on-insert-trigger 'events 'timestamp 1 10)
+      ;; Keep the newest requests.
+      (execute (ct:join #\newline
+                 "create temporary trigger prune_requests after insert on requests"
+                 "begin"
+                 "  delete from requests where rowid <= new.rowid - 100000;"
+                 "end"))
       (create-index 'events_timestamp "events(timestamp)")
 
       (create-index 'refs_name "refs(name)")
@@ -604,8 +587,15 @@ order by distance is null, distance asc, count desc, candidates.name asc"
                           (scalar (execute "select count(*) from refs"))
                           (scalar (execute "select count(*) from files"))
                           (execute "select datetime(timestamp/1000,'unixepoch','localtime'),path from roots order by timestamp desc")
-                          (execute "select datetime(timestamp/1000,'unixepoch','localtime'),pid,message from events order by rowid desc limit ?" limit)))
-                  [(,keywords ,defns ,refs ,files ,roots ,log)
+                          (execute "select datetime(timestamp/1000,'unixepoch','localtime'),pid,message from events order by rowid desc limit ?" limit)
+
+                          (execute
+                           (ct:join #\space
+                             "select method, count(*), min(total), max(total), avg(total), avg(total*total)"
+                             "from requests"
+                             "group by method"
+                             "order by method"))))
+                  [(,keywords ,defns ,refs ,files ,roots ,log ,stats)
                    (http:respond conn 200 '(("Content-Type" . "text/html"))
                      (html->bytevector
                       `(html5
@@ -629,6 +619,28 @@ order by distance is null, distance asc, count desc, candidates.name asc"
                                  [#(,date ,path)
                                   (format "~a ~a\n" date path)]))
                              roots))
+                         (table (@ (style "text-align:right;"))
+                           (thead
+                            (tr
+                             (th "request")
+                             (th "count")
+                             (th "min")
+                             (th "max")
+                             (th "avg")
+                             (th "stddev")))
+                           (tbody
+                            ,@(map
+                               (lambda (row)
+                                 (match row
+                                   [#(,method ,count ,min ,max ,avg ,avg2)
+                                    `(tr
+                                      (td ,method)
+                                      (td ,(format "~:d" count))
+                                      (td ,(format "~:d" min))
+                                      (td ,(format "~:d" max))
+                                      (td ,(format "~,3f" avg))
+                                      (td ,(format "~,3f" (stddev count avg avg2))))]))
+                               stats)))
                          (pre
                           ,@(map
                              (lambda (row)

@@ -812,10 +812,11 @@
                 state)))]))
     (define (handle-info msg state)
       (match msg
-        [#(request-finished ,pid ,id ,result)
+        [#(request-finished ,pid ,id ,result ,timing)
          (cond
           [(ht:ref ($state pid->req) pid #f)
            (rpc:respond id result)
+           (tower-client:log-request timing)
            `#(no-reply ,(delete-req id pid state))]
           [else
            ;; The request was cancelled after the worker finished, and
@@ -968,11 +969,26 @@
          (let* ([me self]
                 [pid (spawn
                       (lambda ()
-                        (send me `#(request-finished ,self ,id ,(thunk)))))])
+                        (let* ([start (erlang:now)]
+                               [result (thunk)]
+                               [end (erlang:now)])
+                          (send me
+                            `#(request-finished ,self ,id ,result
+                                ,(json:make-object
+                                  [method method]
+                                  [filename (request-filename params)]
+                                  [start start]
+                                  [total (- end start)]))))))])
            (monitor pid)
            ($state copy*
              [req->pid (ht:set req->pid id pid)]
              [pid->req (ht:set pid->req pid id)]))]))
+
+    ;; The file a request is about, or #f.
+    (define (request-filename params)
+      (match (try (uri->abs-path (json:get params '(textDocument uri))))
+        [`(catch ,_) #f]
+        [,filename filename]))
 
     (define (handle-request id method params state)
       (match method

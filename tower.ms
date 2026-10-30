@@ -79,9 +79,9 @@ where F.filename=?" filename)
 (define (connect port)
   (ws:connect "localhost" port "/tower" self))
 
-;; Sends a request and returns the result of its response. Each
-;; connection's responses arrive in order, so one id is enough.
-(define (tower-call ws method params)
+;; Sends a request and returns its response. Each connection's
+;; responses arrive in order, so one id is enough.
+(define (tower-request ws method params)
   (ws:send ws
     (json:object->string
      (json:make-object
@@ -91,11 +91,12 @@ where F.filename=?" filename)
       [params params])))
   (receive (after 10000 (throw `#(no-response ,method)))
     [#(ws:message ,@ws ,msg)
-     (json:ref
-      (if (string? msg)
-          (json:string->object msg)
-          (json:bytevector->object msg))
-      'result #f)]))
+     (if (string? msg)
+         (json:string->object msg)
+         (json:bytevector->object msg))]))
+
+(define (tower-call ws method params)
+  (json:ref (tower-request ws method params) 'result #f))
 
 (define (reset-directory ws dir)
   (tower-call ws "reset-directory" (json:make-object [directory dir])))
@@ -259,10 +260,57 @@ where F.filename=?" filename)
            "References: +2\n"
            "Unique files: +1\n"
            " /tmp/root-web\n"
-           "_op_&quot;:&quot;get-definitions&quot;")
+           "_op_&quot;:&quot;connected&quot;")
          (wait-for-clients port 1))
         (let-values ([(status content) (http-get port "/no-such-page")])
           (assert (eqv? status 404)))
+        (ws:close ws)))))
+
+(define (request-timing method filename total)
+  (json:make-object
+   [method method]
+   [filename filename]
+   [start (erlang:now)]
+   [total total]))
+
+;; Sends request timings the way the LSP does, in a notification, so
+;; the tower doesn't respond.
+(define (log-requests ws timings)
+  (ws:send ws
+    (json:object->string
+     (json:make-object
+      [jsonrpc "2.0"]
+      [method "log-requests"]
+      [params (json:make-object [requests timings])]))))
+
+;; Waits until the home page matches pattern and returns the page.
+(define (wait-for-page port pattern)
+  (let ([rx (re pattern)])
+    (let lp ([tries 0])
+      (let ([page (home-page port)])
+        (cond
+         [(pregexp-match rx page) page]
+         [(< tries 100)
+          (receive (after 10 (lp (+ tries 1))))]
+         [else (throw `#(missing ,pattern ,page))])))))
+
+(isolate-mat http-statistics ()
+  ;; Clients time their requests and send the timings in batches. The
+  ;; home page summarizes them by method.
+  (let ([port (start-tower)]
+        [fn "/tmp/root-web/web.ss"]
+        [symbols "<td>textDocument/documentSymbol</td><td>1</td><td>4</td><td>4</td><td>4.000</td><td>0.000</td>"])
+    (on-exit (stop-tower)
+      (let ([ws (connect port)])
+        (reset-directory ws "/tmp/root-web")
+        (log-requests ws
+          (list
+           (request-timing "textDocument/definition" fn 10)
+           (request-timing "textDocument/definition" fn 20)
+           (request-timing "textDocument/documentSymbol" #f 4)))
+        (assert-matches
+         '("<td>textDocument/definition</td><td>2</td><td>10</td><td>20</td><td>15.000</td><td>7.071</td>")
+         (wait-for-page port symbols))
         (ws:close ws)))))
 
 (isolate-mat concurrent-update ()
