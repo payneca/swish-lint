@@ -158,7 +158,7 @@ substr(F.filename,-3)='.ss' desc, F.filename asc, D.line asc"
       (db:log 'log-db
         "insert into events(timestamp,pid,message) values(?,?,?)"
         (coerce timestamp)
-        (coerce self)
+        (coerce (or (client-pid) self))
         (coerce message))
       (cond
        [(< (verbosity) level) (void)]
@@ -325,7 +325,6 @@ order by distance is null, distance asc, count desc, candidates.name asc"
                       dir)
                     (execute "delete from refs where root_fk=? or root_fk is null" pk)
                     pk]))])
-         (root-dir dir)
          (root-key pk)
          (rpc:respond ws msg "ok"))]
       [update-keywords
@@ -391,38 +390,51 @@ order by distance is null, distance asc, count desc, candidates.name asc"
        (app:shutdown)]
       ))
 
-  (define root-dir (make-process-parameter #f))
+  ;; The tower handles a client's message with the client's root and
+  ;; logs events with the client's pid.
   (define root-key (make-process-parameter #f))
+  (define client-pid (make-process-parameter #f))
 
+  ;; Each connection reads its messages, and the tower gen-server
+  ;; handles them one at a time, so a handler's db:log and transaction
+  ;; calls aren't interleaved with another connection's.
   (define (client)
-    (ui:register)
-    (let lp ()
+    (tower:register)
+    (let lp ([root-fk #f])
       (receive
        [#(ws:message ,ws ,msg)
-        (match (try
-                (handle-message ws
-                  (if (string? msg)
-                      (json:string->object msg)
-                      (json:bytevector->object msg))))
+        (match (tower:handle-message ws
+                 (if (string? msg)
+                     (json:string->object msg)
+                     (json:bytevector->object msg))
+                 root-fk)
           [`(catch ,reason ,e)
            (do-log 1 (exit-reason->english reason))
            (throw e)]
-          [,_ (lp)])]
+          [#(ok ,root-fk) (lp root-fk)])]
        [#(ws:closed ,ws ,code ,reason) 'ok]
-       [#(ws:init ,ws) (lp)])))
+       [#(ws:init ,ws) (lp root-fk)])))
 
-  (define (ui:start&link)
-    (define-state-tuple <ui> waketime clients)
+  (define (tower:start&link)
+    (define-state-tuple <tower> waketime clients)
 
     (define (reply x state)
       `#(reply ,x ,state ,($state waketime)))
     (define (no-reply state)
       `#(no-reply ,state ,($state waketime)))
 
-    (define (init) `#(ok ,(<ui> make [waketime 'infinity] [clients '()])))
+    (define (init) `#(ok ,(<tower> make [waketime 'infinity] [clients '()])))
     (define (terminate reason state) 'ok)
     (define (handle-call msg from state)
       (match msg
+        [#(handle-message ,pid ,ws ,msg ,root-fk)
+         ;; A failure goes back to the client, which logs it and exits.
+         (reply
+          (try
+           (parameterize ([root-key root-fk] [client-pid pid])
+             (handle-message ws msg)
+             `#(ok ,(root-key))))
+          state)]
         [#(register ,pid)
          (monitor pid)
          (let ([clients (cons pid ($state clients))])
@@ -456,16 +468,20 @@ order by distance is null, distance asc, count desc, candidates.name asc"
         [timeout
          (app:shutdown)
          `#(no-reply ,state)]))
-    (gen-server:start&link 'ui))
+    (gen-server:start&link 'tower))
 
-  (define (ui:register)
-    (gen-server:call 'ui `#(register ,self)))
+  ;; Calls wait for the messages ahead of them, which can take a while.
+  (define (tower:handle-message ws msg root-fk)
+    (gen-server:call 'tower `#(handle-message ,self ,ws ,msg ,root-fk) 'infinity))
 
-  (define (ui:num-clients)
-    (gen-server:call 'ui 'num-clients))
+  (define (tower:register)
+    (gen-server:call 'tower `#(register ,self) 'infinity))
 
-  (define (ui:shutdown-time)
-    (gen-server:call 'ui 'shutdown-time))
+  (define (tower:num-clients)
+    (gen-server:call 'tower 'num-clients 'infinity))
+
+  (define (tower:shutdown-time)
+    (gen-server:call 'tower 'shutdown-time 'infinity))
 
   (define (tower:running? port-number)
     (match (try
@@ -570,13 +586,13 @@ order by distance is null, distance asc, count desc, candidates.name asc"
 
   (define (tower:sup-spec port-number)
     `(#(tower-db:setup ,tower-db:setup temporary 1000 worker)
-      #(ui ,ui:start&link permanent 1000 worker)
+      #(tower ,tower:start&link permanent 1000 worker)
       ,@(http:configure-server 'http port-number
           (http:url-handler
            (match (<request> path request)
              ["/"
-              (let* ([num-clients (ui:num-clients)]
-                     [shutdown-time (and (zero? num-clients) (ui:shutdown-time))]
+              (let* ([num-clients (tower:num-clients)]
+                     [shutdown-time (and (zero? num-clients) (tower:shutdown-time))]
                      [limit (http:find-param "limit" params)]
                      [limit (and limit (string->number limit))]
                      [limit (or limit 20)])

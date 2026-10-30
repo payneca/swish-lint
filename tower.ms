@@ -315,7 +315,8 @@ where F.filename=?" filename)
 
 (isolate-mat concurrent-update ()
   ;; Two connections replace the same file's references at once. The
-  ;; file must end up with one set, not a mix of both.
+  ;; tower handles one message at a time, so the file ends up with one
+  ;; set, not a mix of both.
   (let ([port (start-tower)]
         [filename "/tmp/concurrent.ss"]
         [n 20000])
