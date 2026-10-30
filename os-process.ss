@@ -89,7 +89,10 @@
                [op op]
                [ep ep]
                [put put]
-               [exit-status 1]
+               ;; The signal that stops it. On Windows, libuv only
+               ;; terminates a process for SIGTERM, SIGKILL, SIGINT or
+               ;; SIGQUIT, so it's SIGTERM, not SIGHUP.
+               [exit-status 15]
                [reader (spawn&link (lambda () (get ip me)))]
                [tracer (spawn&link (lambda () (get-trace ep me)))]
                [ended #f]

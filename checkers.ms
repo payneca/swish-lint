@@ -173,6 +173,15 @@
              log)
             #t)]
       [,_ #f]))
+  ;; On Windows, a program that was killed can hold its script open
+  ;; for a moment after the checker gives up on it.
+  (define (remove-file/retry fn)
+    (let lp ([tries 0])
+      (if (= tries 100)
+          (remove-file fn)
+          (match (try (remove-file fn))
+            [`(catch ,_) (receive (after 10 (lp (+ tries 1))))]
+            [,_ 'ok]))))
   (with-tmp-dir
    ;; The program can't be started.
    (match-let*
@@ -212,7 +221,7 @@
      (match-let*
       ([(,results ,log) (run (script-command fn))])
       (assert (failed? results log "produced no output for 5 s")))
-     (remove-file fn))
+     (remove-file/retry fn))
    ;; It exits 0 without any diagnostics.
    (let ([fn (path-combine (tmp-dir) "quiet")])
      (write-script fn '())
