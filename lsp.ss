@@ -35,6 +35,7 @@
    (config)
    (config-params)
    (doc)
+   (folding)
    (indent)
    (json)
    (keywords)
@@ -539,6 +540,26 @@
          json-null]
         [,data (json:make-object [data data])])))
 
+  ;; limit is #f or the client's rangeLimit.
+  (define (get-folding-ranges doc limit)
+    (trace-time 'folding-ranges
+      (match (try (folding-ranges (doc:text doc) limit))
+        [`(catch ,reason)
+         (trace-expr `(folding-ranges => ,(exit-reason->english reason)))
+         '()]
+        [,ranges
+         (map
+          (lambda (r)
+            (match r
+              [#(,start ,end ,kind)
+               (let ([obj (json:make-object
+                           [startLine start]
+                           [endLine end])])
+                 (when kind
+                   (json:extend-object obj [kind kind]))
+                 obj)]))
+          ranges)])))
+
   (define (get-symbols doc uri)
     (define-tuple <range> bfp efp)
     (define-tuple <doc-symbol>
@@ -1013,6 +1034,7 @@
                   [hoverProvider #f]
                   [completionProvider #t]
                   [definitionProvider #t]
+                  [foldingRangeProvider #t]
                   [referencesProvider #t]
                   [semanticTokensProvider
                    (json:make-object
@@ -1094,6 +1116,16 @@
             [(ht:ref ($state uri->doc) uri #f) =>
              (lambda (doc)
                `#(spawn ,(lambda () (indent-range doc range options)) ,state))]
+            [else `#(ok () ,state)]))]
+        ["textDocument/foldingRange"
+         (let* ([uri (json:get params '(textDocument uri))]
+                [limit (json:ref ($state client-cap)
+                         '(textDocument foldingRange rangeLimit) #f)]
+                [limit (and (fixnum? limit) (fx>= limit 0) limit)])
+           (cond
+            [(ht:ref ($state uri->doc) uri #f) =>
+             (lambda (doc)
+               `#(spawn ,(lambda () (get-folding-ranges doc limit)) ,state))]
             [else `#(ok () ,state)]))]
         ["textDocument/semanticTokens/range"
          (let ([uri (json:get params '(textDocument uri))]

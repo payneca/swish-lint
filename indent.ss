@@ -31,9 +31,11 @@
    indent-tokens
    token
    token-bfp
+   token-close?
    token-efp
    token-err
    token-length
+   token-open?
    token-props
    token-raw
    token-type

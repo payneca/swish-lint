@@ -1979,6 +1979,67 @@
 
          'ok)))))
 
+;; Returns each range as (start end kind).
+(define (get-folding-ranges uri)
+  (map
+   (lambda (r)
+     (list (json:get r 'startLine) (json:get r 'endLine)
+       (json:ref r 'kind #f)))
+   (rpc-client:call 'rpc
+     (json:make-object
+      [jsonrpc "2.0"]
+      [method "textDocument/foldingRange"]
+      [params
+       (json:make-object
+        [textDocument (json:make-object [uri uri])])]))))
+
+(isolate-mat folding-ranges ()
+  (let ([rpc (start-lsp-server #f)])
+    (on-exit (stop-lsp-server rpc)
+      (assert (null? (get-folding-ranges "file:///tmp/does-not-exist.ss")))
+      (let ([uri "file:///tmp/fold.ss"])
+        (did-open uri
+          (code
+           ";;; one"
+           ";;; two"
+           "(define (f x)"
+           "  (let ([y (+ x 1)])"
+           "    (* y"
+           "       2)))"))
+        (match-let*
+         ([((0 1 "comment") (2 5 #f) (3 5 #f) (4 5 #f))
+           (get-folding-ranges uri)])
+         'ok)
+        ;; Code that doesn't read still folds.
+        (did-change uri (code "(define (f x)" "  (g x" "     y)"))
+        (match-let*
+         ([((1 2 #f)) (get-folding-ranges uri)])
+         'ok)
+        (did-close uri)))))
+
+(isolate-mat folding-range-limit ()
+  ;; The server sends no more ranges than the client's rangeLimit.
+  (let ([rpc (start-uninitialized-lsp-server)])
+    (on-exit (stop-lsp-server rpc)
+      (rpc-client:call rpc
+        (json:make-object
+         [jsonrpc "2.0"]
+         [method "initialize"]
+         [params
+          (json:make-object
+           [rootUri json-null]
+           [capabilities
+            (json:make-object
+             [textDocument
+              (json:make-object
+               [foldingRange (json:make-object [rangeLimit 1])])])])]))
+      (let ([uri "file:///tmp/limit.ss"])
+        (did-open uri (code "(a" " (b" "  c))"))
+        (match-let*
+         ([((0 2 #f)) (get-folding-ranges uri)])
+         'ok)
+        (did-close uri)))))
+
 (isolate-mat semver ()
   ;; from https://semver.org/#is-there-a-suggested-regular-expression-regex-to-check-a-semver-string
   (define pat (re "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+([0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?$"))
