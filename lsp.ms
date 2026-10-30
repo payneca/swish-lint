@@ -2218,6 +2218,110 @@
 
          'ok)))))
 
+;; Returns each range as (start end kind), or null when there's no result.
+(define (get-folding-ranges uri)
+  (get-folding-ranges* uri
+    (lambda (r)
+      (list (json:get r 'startLine) (json:get r 'endLine)
+        (json:ref r 'kind #f)))))
+
+;; Returns each range as (startLine startCharacter endLine endCharacter),
+;; with #f for a char that's left out.
+(define (get-folding-chars uri)
+  (get-folding-ranges* uri
+    (lambda (r)
+      (list (json:get r 'startLine) (json:ref r 'startCharacter #f)
+        (json:get r 'endLine) (json:ref r 'endCharacter #f)))))
+
+(define (get-folding-ranges* uri convert)
+  (match (rpc-client:call 'rpc
+           (json:make-object
+            [jsonrpc "2.0"]
+            [method "textDocument/foldingRange"]
+            [params
+             (json:make-object
+              [textDocument (json:make-object [uri uri])])]))
+    [,@json-null json-null]
+    [,ranges (map convert ranges)]))
+
+(isolate-mat folding-ranges ()
+  (let ([rpc (start-lsp-server #f)])
+    (on-exit (stop-lsp-server rpc)
+      (assert (eq? json-null (get-folding-ranges "file:///tmp/does-not-exist.ss")))
+      (let ([uri "file:///tmp/fold.ss"])
+        (did-open uri
+          (code
+           ";;; one"
+           ";;; two"
+           "(define (f x)"
+           "  (let ([y (+ x 1)])"
+           "    (* y"
+           "       2)))"))
+        (match-let*
+         ([((0 1 "comment") (2 5 #f) (3 5 #f) (4 5 #f))
+           (get-folding-ranges uri)])
+         'ok)
+        ;; Code that doesn't read still folds.
+        (did-change uri (code "(define (f x)" "  (g x" "     y)"))
+        (match-let*
+         ([((1 2 #f)) (get-folding-ranges uri)])
+         'ok)
+        ;; Without lineFoldingOnly, ranges have chars, and ranges that
+        ;; start on one line are all kept.
+        (did-change uri (code ";; a" ";; b" "((a" "  b)" " c)"))
+        (match-let*
+         ([((0 #f 1 #f) (2 1 4 2) (2 2 3 3)) (get-folding-chars uri)])
+         'ok)
+        (did-close uri)))))
+
+(isolate-mat folding-line-only ()
+  ;; With lineFoldingOnly, ranges have no chars, and only the outermost
+  ;; range on each start line is kept.
+  (let ([rpc (start-uninitialized-lsp-server)])
+    (on-exit (stop-lsp-server rpc)
+      (rpc-client:call rpc
+        (json:make-object
+         [jsonrpc "2.0"]
+         [method "initialize"]
+         [params
+          (json:make-object
+           [rootUri json-null]
+           [capabilities
+            (json:make-object
+             [textDocument
+              (json:make-object
+               [foldingRange
+                (json:make-object [lineFoldingOnly #t])])])])]))
+      (let ([uri "file:///tmp/line-only.ss"])
+        (did-open uri (code "((a" "  b)" " c)"))
+        (match-let*
+         ([((0 #f 2 #f)) (get-folding-chars uri)])
+         'ok)
+        (did-close uri)))))
+
+(isolate-mat folding-range-limit ()
+  ;; The server sends no more ranges than the client's rangeLimit.
+  (let ([rpc (start-uninitialized-lsp-server)])
+    (on-exit (stop-lsp-server rpc)
+      (rpc-client:call rpc
+        (json:make-object
+         [jsonrpc "2.0"]
+         [method "initialize"]
+         [params
+          (json:make-object
+           [rootUri json-null]
+           [capabilities
+            (json:make-object
+             [textDocument
+              (json:make-object
+               [foldingRange (json:make-object [rangeLimit 1])])])])]))
+      (let ([uri "file:///tmp/limit.ss"])
+        (did-open uri (code "(a" " (b" "  c))"))
+        (match-let*
+         ([((0 2 #f)) (get-folding-ranges uri)])
+         'ok)
+        (did-close uri)))))
+
 (isolate-mat semver ()
   ;; from https://semver.org/#is-there-a-suggested-regular-expression-regex-to-check-a-semver-string
   (define pat (re "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+([0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?$"))

@@ -35,6 +35,7 @@
    (config)
    (config-params)
    (doc)
+   (folding)
    (indent)
    (json)
    (progress)
@@ -560,6 +561,33 @@
          (trace-expr `(semantic-tokens => ,(exit-reason->english reason)))
          json-null]
         [,data (json:make-object [data data])])))
+
+  ;; limit is #f or the client's rangeLimit, and line-only? is the
+  ;; client's lineFoldingOnly.
+  (define (get-folding-ranges doc limit line-only?)
+    (trace-time 'folding-ranges
+      (match (try (folding-ranges (doc:text doc) limit line-only?))
+        [`(catch ,reason)
+         (trace-expr `(folding-ranges => ,(exit-reason->english reason)))
+         json-null]
+        [,ranges
+         (map
+          (lambda (r)
+            (match r
+              [`(<fold> ,start-line0 ,start-char0 ,end-line0 ,end-char0 ,kind)
+               (let ([obj (json:make-object
+                           [startLine start-line0]
+                           [endLine end-line0])])
+                 (unless line-only?
+                   ;; Without a char, the client uses the end of the line.
+                   (when start-char0
+                     (json:extend-object obj [startCharacter start-char0]))
+                   (when end-char0
+                     (json:extend-object obj [endCharacter end-char0])))
+                 (when kind
+                   (json:extend-object obj [kind kind]))
+                 obj)]))
+          ranges)])))
 
   (define (get-symbols doc uri)
     (define-tuple <range> bfp efp)
@@ -1110,6 +1138,7 @@
                   [hoverProvider #f]
                   [completionProvider #t]
                   [definitionProvider #t]
+                  [foldingRangeProvider #t]
                   [referencesProvider #t]
                   [semanticTokensProvider
                    (json:make-object
@@ -1156,6 +1185,15 @@
                [options (json:get params 'options)])
            (on-doc params state
              (lambda (doc uri) (indent-range doc range options))))]
+        ["textDocument/foldingRange"
+         (let* ([limit (json:ref ($state client-cap)
+                         '(textDocument foldingRange rangeLimit) #f)]
+                [limit (and (fixnum? limit) (fx>= limit 0) limit)]
+                [line-only?
+                 (eq? #t (json:ref ($state client-cap)
+                           '(textDocument foldingRange lineFoldingOnly) #f))])
+           (on-doc params state
+             (lambda (doc uri) (get-folding-ranges doc limit line-only?))))]
         ["textDocument/semanticTokens/range"
          (let ([range (json:get params 'range)]
                [semtok-mode ($state semtok-mode)])

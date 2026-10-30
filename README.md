@@ -11,6 +11,7 @@ Protocol](https://microsoft.github.io/language-server-protocol/).
 Features include:
 
 - Code completion
+- Code folding
 - Document highlights
 - Document symbols (outline and breadcrumbs)
 - Goto definition
