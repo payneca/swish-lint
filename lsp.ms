@@ -419,6 +419,52 @@
       ;; The server is still running.
       (assert (eq? json-null (request "textDocument/hover" (json:make-object)))))))
 
+(isolate-mat cancel-request ()
+  ;; Cancelling a request that is still running kills its worker and
+  ;; responds with RequestCancelled. The worker never responds.
+  (let ([rpc (start-lsp-server #f)]
+        [os (open-output-string)]
+        [me self])
+    (on-exit (stop-lsp-server rpc)
+      (define wait-for-test-sync (capture-test-sync))
+      (let ([uri "file:///tmp/cancel.ss"])
+        (did-open uri (code "(define (slow) 1)" "(slow)" ""))
+        (wait-for-test-sync uri)
+        ;; Hold the tower's database, so the request waits in the tower.
+        (spawn
+         (lambda ()
+           (transaction 'log-db
+             (send me `#(holding ,self))
+             (receive [release 'ok]))))
+        (let ([holder (receive [#(holding ,pid) pid])]
+              [req (json:make-object
+                    [jsonrpc "2.0"]
+                    [method "textDocument/definition"]
+                    [params
+                     (json:make-object
+                      [textDocument (json:make-object [uri uri])]
+                      [position (json:make-object [line 1] [character 2])])])])
+          (parameterize ([console-error-port os])
+            (rpc-client:send 'rpc req
+              (lambda (id reply) (send me `#(reply ,id ,reply))))
+            (let ([id (json:get req 'id)])
+              (rpc-client:notify 'rpc
+                (json:make-object
+                 [jsonrpc "2.0"]
+                 [method "$/cancelRequest"]
+                 [params (json:make-object [id id])]))
+              (receive (after 5000 (throw 'no-cancel-response))
+                [#(reply ,@id `(catch #(rpc-error -32800 ,_))) 'ok])
+              (send holder 'release)
+              ;; Once the tower answers again, a new request gets a
+              ;; normal response, and nothing more comes for id.
+              (assert (pair? (get-definitions uri 1 2)))
+              (receive (after 100 'ok)
+                [#(reply ,@id ,reply) (throw `#(second-response ,reply))]))))
+        (did-close uri))
+      ;; The test client reports a response to an id it didn't send.
+      (assert (string=? "" (get-output-string os))))))
+
 (isolate-mat cancelled-request-finished ()
   ;; A worker may finish just as its request is cancelled, leaving
   ;; request-finished in the server's mailbox after the cancellation has
@@ -518,6 +564,80 @@
            (json:make-object
             [rootUri json-null]
             [capabilities (json:make-object)])]))))))
+
+(define-environment-parameters SWISH_LINT_PORT)
+
+;; Runs swish-lint --lsp, writes msgs to its stdin, closes stdin if
+;; close?, and returns its exit status.
+(define (lsp-exit-status msgs close?)
+  (let-values ([(to-stdin from-stdout from-stderr os-pid)
+                (spawn-os-process
+                 (path-combine (base-dir)
+                   (if windows? "swish-lint.exe" "swish-lint"))
+                 '("--lsp")
+                 self)])
+    (on-exit (begin (close-port from-stdout) (close-port from-stderr))
+      (let ([op (binary->utf8 to-stdin)])
+        (for-each
+         (lambda (msg)
+           (lsp:write-msg op msg)
+           (flush-output-port op))
+         msgs)
+        (when close?
+          (close-port op))
+        (receive (after 30000
+                   (osi_kill* os-pid 15)
+                   (throw 'timeout))
+          [#(process-terminated ,@os-pid ,exit-status ,_)
+           exit-status])))))
+
+(isolate-mat exit-status ()
+  ;; The server exits with 0 after a shutdown request and 1 without one,
+  ;; whether the client sends exit or closes stdin.
+  (define initialize
+    (list
+     (json:make-object
+      [jsonrpc "2.0"]
+      [id 1]
+      [method "initialize"]
+      [params
+       (json:make-object
+        [rootUri json-null]
+        [capabilities (json:make-object)])])
+     (json:make-object
+      [jsonrpc "2.0"]
+      [method "initialized"]
+      [params (json:make-object)])))
+  (define shutdown
+    (json:make-object
+     [jsonrpc "2.0"]
+     [id 2]
+     [method "shutdown"]))
+  (define exit
+    (json:make-object
+     [jsonrpc "2.0"]
+     [method "exit"]))
+  (log-file ":memory:")
+  (match-let*
+   ([#(ok ,_)
+     (supervisor:start&link 'main-sup 'one-for-all 0 1
+       (append
+        (make-swish-sup-spec (list swish-event-logger))
+        (tower:sup-spec 0)))])
+   ;; Use this tower, so the server doesn't launch one.
+   (SWISH_LINT_PORT (number->string (http:get-port-number 'http)))
+   (on-exit (let ([pid (whereis 'main-sup)])
+              (SWISH_LINT_PORT "")
+              (unlink pid)
+              (monitor pid)
+              (kill pid 'shutdown)
+              (receive [`(DOWN ,_ ,@pid ,_) 'ok]))
+     (match-let*
+      ([0 (lsp-exit-status `(,@initialize ,shutdown ,exit) #f)]
+       [1 (lsp-exit-status `(,@initialize ,exit) #f)]
+       [0 (lsp-exit-status `(,@initialize ,shutdown) #t)]
+       [1 (lsp-exit-status initialize #t)])
+      'ok))))
 
 (isolate-mat smoke ()
   (let ([rpc (start-lsp-server (get-real-path "."))])
@@ -862,6 +982,69 @@
           (for-each wait-for-test-sync uris))
         (assert (equal? foo-defn (get-defns uri2 0 7)))
         (for-each did-close uris)))))
+
+(isolate-mat did-change-incremental ()
+  (define (edit start-line0 start-char0 end-line0 end-char0 text)
+    (json:make-object
+     [range
+      (json:make-object
+       [start (json:make-object [line start-line0] [character start-char0])]
+       [end (json:make-object [line end-line0] [character end-char0])])]
+     [text text]))
+  (define (did-change* uri changes)
+    (rpc-client:notify 'rpc
+      (json:make-object
+       [jsonrpc "2.0"]
+       [method "textDocument/didChange"]
+       [params
+        (json:make-object
+         [textDocument (json:make-object [uri uri])]
+         [contentChanges changes])])))
+  ;; Returns each symbol's name and the range of the name.
+  (define (symbols uri)
+    (map
+     (lambda (x)
+       (cons (json:get x 'name) (extract-range (json:get x 'selectionRange))))
+     (get-symbols uri)))
+  (let ([rpc (start-lsp-server #f)])
+    (on-exit (stop-lsp-server rpc)
+      (let ([uri "file:///tmp/incremental.ss"])
+        (did-open uri (code "(define (foo) 1)" "(define (bar) 2)" ""))
+        ;; The changes in one message apply in order, each to the
+        ;; result of the one before.
+        (did-change* uri
+          (list
+           (edit 0 9 0 12 "alpha")
+           (edit 1 0 1 0 "(define (mid) 0)\n")
+           ;; Replace "mid) 0)\n(define (bar" across a line break.
+           (edit 1 9 2 12 "gamma")))
+        (match-let*
+         ([(("alpha" from 0 9 to 0 14) ("gamma" from 1 9 to 1 14))
+           (symbols uri)])
+         'ok)
+        ;; Characters are code points, so λ counts as one.
+        (did-change* uri (list (edit 2 0 2 0 "(define (λx) 3)\n")))
+        (match-let*
+         ([(("alpha" from 0 9 to 0 14)
+            ("gamma" from 1 9 to 1 14)
+            ("λx" from 2 9 to 2 11))
+           (symbols uri)])
+         'ok)
+        ;; Delete the first line.
+        (did-change* uri (list (edit 0 0 1 0 "")))
+        (match-let*
+         ([(("gamma" from 0 9 to 0 14) ("λx" from 1 9 to 1 11))
+           (symbols uri)])
+         'ok)
+        ;; A change without a range replaces the whole text.
+        (did-change* uri
+          (list
+           (json:make-object [text "(define (whole) 0)\n"])
+           (edit 0 9 0 14 "part")))
+        (match-let*
+         ([(("part" from 0 9 to 0 13)) (symbols uri)])
+         'ok)
+        (did-close uri)))))
 
 (isolate-mat did-close ()
   (let ([rpc (start-lsp-server #f)])
