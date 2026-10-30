@@ -45,7 +45,7 @@
       [(_ e0 e1 ...)
        (parameterize ([tmp-dir (path-combine (base-dir) "tmp")])
          e0 e1 ...
-         (remove-directory (tmp-dir)))]))
+         (delete-tree (tmp-dir)))]))
 
   (define-environment-parameters XDG_CONFIG_HOME)
 
