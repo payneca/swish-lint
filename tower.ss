@@ -86,11 +86,13 @@ where D.line=?1
   and F.filename=?3"
        line char filename)))
 
+  ;; In the next two queries, +D.file_fk keeps SQLite from reading every
+  ;; ref in the file. It finds the name's refs first, which are fewer.
   (define ($defns-in-file uid filename)
     (maybe-rows
      (execute "
 select F.filename,D.line,D.char,D.len from refs D
-inner join files F on F.file_pk=D.file_fk
+inner join files F on F.file_pk=+D.file_fk
 where D.uid=?1
   and F.filename=?2
   and D.type='defn'
@@ -111,7 +113,7 @@ order by substr(F.filename,-3)='.ss' desc, F.filename asc, D.line asc"
   (define ($refs-in-file line char filename)
     (execute "
 select D.line,D.char,D.len from refs D
-inner join files F on F.file_pk=D.file_fk
+inner join files F on F.file_pk=+D.file_fk
 where D.uid in
   (select D.uid
    from refs D
@@ -206,7 +208,9 @@ substr(F.filename,-3)='.ss' desc, F.filename asc, D.line asc"
                    ;; new local is most likely defined above the
                    ;; cursor, so references below cost more. Names
                    ;; with no reference in this file have a null
-                   ;; distance and sort after the rest.
+                   ;; distance and sort after the rest. count: the
+                   ;; name's references in this root, so other
+                   ;; projects don't skew the ranking.
                    (execute "
 select
   min(case when refs.file_fk=?4 then
@@ -222,7 +226,7 @@ from
  where pre1=?1 and name like ?2 escape '\x1B;' and root_fk=?3
 ) candidates
 left outer join refs
-on candidates.name = refs.name
+on candidates.name = refs.name and refs.root_fk=?3
 group by candidates.name
 order by distance is null, distance asc, count desc, candidates.name asc"
                      pre1 pat root-fk file-fk line completion-below-cost)))]
@@ -546,12 +550,21 @@ order by distance is null, distance asc, count desc, candidates.name asc"
                  "end"))
       (create-index 'events_timestamp "events(timestamp)")
 
-      (create-index 'refs_name "refs(name)")
-      (create-index 'refs_uid "refs(uid)")
-      (create-index 'refs_root "refs(root_fk)")
-      (create-index 'refs_file "refs(file_fk)")
-      (create-index 'refs_pre1 "refs(pre1)")
-      (create-index 'refs_type "refs(type)"))
+      ;; Each index matches particular lookups. A database on disk may
+      ;; still have the single-column indexes these replace.
+      (for-each
+       (lambda (name) (execute (format "drop index if exists ~a" name)))
+       '(refs_name refs_uid refs_root refs_file refs_pre1 refs_type))
+      ;; A name under the cursor, and a file's refs.
+      (create-index 'refs_file_line "refs(file_fk, line)")
+      ;; Definitions and references of a name, in a root or anywhere.
+      (create-index 'refs_uid_root "refs(uid, root_fk)")
+      (create-index 'refs_defn "refs(uid, root_fk) where type='defn'")
+      ;; Completion candidates, and a root's refs.
+      (create-index 'refs_root_pre1_name "refs(root_fk, pre1, name)")
+      ;; Completion's counts and distances, from the index alone.
+      (create-index 'refs_root_name "refs(root_fk, name, file_fk, line)")
+      (create-index 'roots_path "roots(path)"))
     (define (upgrade-db)
       (match (log-db:version schema-name)
         [,@schema-version 'ok]
