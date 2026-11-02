@@ -216,6 +216,32 @@ where F.filename=?" filename)
          (ws:close a)
          (ws:close b))))))
 
+(isolate-mat completion-counts ()
+  ;; Completions rank by references in the client's root, so a name
+  ;; used often in another root doesn't come first. The completions
+  ;; are in a file with no references, so distance doesn't decide.
+  (let ([port (start-tower)]
+        [a.ss "/tmp/root-a/a.ss"]
+        [b.ss "/tmp/root-b/b.ss"])
+    (on-exit (stop-tower)
+      (let ([a (connect port)]
+            [b (connect port)])
+        (match-let*
+         (["ok" (reset-directory a "/tmp/root-a")]
+          ["ok" (reset-directory b "/tmp/root-b")]
+          ["ok" (update a a.ss
+                  (list
+                   (ref "sh-few" 0 1 #f)
+                   (ref "sh-few" 1 1 #f)
+                   (ref "sh-many" 2 1 #f)))]
+          ["ok" (update b b.ss
+                  (map (lambda (line) (ref "sh-many" line 1 #f))
+                    (iota 5)))]
+          [("sh-few" "sh-many")
+           (completions a "/tmp/root-a/new.ss" 0 0 "sh-")])
+         (ws:close a)
+         (ws:close b))))))
+
 (isolate-mat missing-root ()
   ;; A client that never sets a root still gets answers about its own
   ;; file.
