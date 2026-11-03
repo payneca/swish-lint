@@ -1934,3 +1934,44 @@
     [1 (find-start-line1 (code "(display \"hello" "world\"" "") 3)]
     [3 (find-start-line1 (code "#|" "|#" "(foo" "") 4)])
    'ok))
+
+(isolate-mat check-indent ()
+  ;; --check-indent reports each file that --indent would change, with
+  ;; the first line that would change and how many would, and exits with
+  ;; 1. It changes no file.
+  (define (write-text fn text)
+    (let ([op (open-file-to-replace (make-directory-path fn))])
+      (on-exit (close-port op)
+        (display text op))))
+  (define (check-indent . files)
+    (let-values ([(to-stdin from-stdout from-stderr os-pid)
+                  (spawn-os-process
+                   (path-combine (base-dir)
+                     (if windows? "swish-lint.exe" "swish-lint"))
+                   (cons "--check-indent" files)
+                   self)])
+      (close-port to-stdin)
+      (on-exit (begin (close-port from-stdout) (close-port from-stderr))
+        (let ([ip (binary->utf8 from-stdout)])
+          (let lp ([lines '()])
+            (let ([line (get-line ip)])
+              (if (eof-object? line)
+                  (receive (after 30000 (throw 'timeout))
+                    [#(process-terminated ,@os-pid ,exit-status ,_)
+                     (list exit-status (reverse lines))])
+                  (lp (cons line lines)))))))))
+  (with-tmp-dir
+   (let ([good (path-combine (tmp-dir) "good.ss")]
+         [bad (path-combine (tmp-dir) "bad.ss")]
+         [one (path-combine (tmp-dir) "one.ss")]
+         [bad-text "(define (f x)\n     (+ x 1))\n(let ()\n x)\n"])
+     (write-text good "(define (f x)\n  (+ x 1))\n")
+     (write-text bad bad-text)
+     (write-text one "(let ()\n   x)\n")
+     (match-let*
+      ([(0 ()) (check-indent good)]
+       [(1 (,line1 ,line2)) (check-indent good bad one)])
+      (assert (equal? line1 (format "~a: line 2: indentation differs (2 lines)" bad)))
+      (assert (equal? line2 (format "~a: line 2: indentation differs (1 line)" one)))
+      (assert (equal? bad-text (utf8->string (read-file bad))))
+      (assert (not (file-exists? (string-append bad "~"))))))))

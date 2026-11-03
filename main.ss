@@ -59,6 +59,8 @@
    [regexp-pass -r (list "<type>" "<regexp>")
      "report <regexp> matches as <type>={info|warning|error}"]
    [indent --indent bool "indent files (edit in-place)"]
+   [check-indent --check-indent bool
+     "report files that --indent would change, without changing them"]
    [tower --tower bool "start tower server"]
    [tower-db --tower-db (string "<filename>") "save tower database to <filename>"]
    [update-keywords --update-keywords bool "update keywords"]
@@ -67,6 +69,19 @@
    [version --version bool "print version information"]
    [stdio --stdio bool "Visual Studio Code insists on providing this argument"] ; ignored
    [files (list . "file") "check file"]))
+
+;; Returns the first line that differs, 1-based, and how many differ.
+(define (changed-lines old new)
+  (let lp ([old old] [new new] [line 1] [first #f] [count 0])
+    (match (list old new)
+      [(() ()) (values first count)]
+      [(,old ,new)
+       (let ([same? (and (pair? old) (pair? new) (string=? (car old) (car new)))])
+         (lp (if (pair? old) (cdr old) '())
+           (if (pair? new) (cdr new) '())
+           (+ line 1)
+           (if same? first (or first line))
+           (if same? count (+ count 1))))])))
 
 (software-info:install)
 (let* ([opt (parse-command-line-arguments cli)]
@@ -161,6 +176,24 @@
       (match-let* ([#(ok ,pid) (tower-client:start&link tower-port-number void)])
         (unlink pid)
         (tower-client:update-keywords keywords)))]
+   [(and (opt 'check-indent) (not (null? files)))
+    ;; Exits with 1 when any file would change, for scripts and CI.
+    (exit
+     (fold-left
+      (lambda (acc filename)
+        (let* ([text (utf8->string (read-file filename))]
+               [indented (indent text)])
+          (cond
+           [(string=? text indented) acc]
+           [else
+            (let-values ([(first count)
+                          (changed-lines (split text #\newline)
+                            (split indented #\newline))])
+              (printf "~a: line ~a: indentation differs (~a line~:p)\n"
+                filename first count))
+            1])))
+      0
+      files))]
    [(and (opt 'indent) (not (null? files)))
     (let ([verbose (opt 'verbose)])
       (for-each
