@@ -22,6 +22,7 @@
 
 (import
  (indent)
+ (os)
  (read)
  (software-info)
  (testing common)
@@ -1948,3 +1949,35 @@
     [1 (find-start-line1 (code "(display \"hello" "world\"" "") 3)]
     [3 (find-start-line1 (code "#|" "|#" "(foo" "") 4)])
    'ok))
+
+(isolate-mat check-indent ()
+  ;; --check-indent reports each file that --indent would change, with
+  ;; the first line that would change and how many would, and exits with
+  ;; 1. It changes no file.
+  (define (write-text fn text)
+    (let ([op (open-file-to-replace (make-directory-path fn))])
+      (on-exit (close-port op)
+        (display text op))))
+  (define (check-indent . files)
+    (match (os:run
+            (path-combine (base-dir)
+              (if windows? "swish-lint.exe" "swish-lint"))
+            (cons "--check-indent" files)
+            (os:run-options [timeout 30000]))
+      [`(<os:result> ,stdout ,exit-status)
+       (list exit-status stdout)]))
+  (with-tmp-dir
+   (let ([good (path-combine (tmp-dir) "good.ss")]
+         [bad (path-combine (tmp-dir) "bad.ss")]
+         [one (path-combine (tmp-dir) "one.ss")]
+         [bad-text "(define (f x)\n     (+ x 1))\n(let ()\n x)\n"])
+     (write-text good "(define (f x)\n  (+ x 1))\n")
+     (write-text bad bad-text)
+     (write-text one "(let ()\n   x)\n")
+     (match-let*
+      ([(0 ()) (check-indent good)]
+       [(1 (,line1 ,line2)) (check-indent good bad one)])
+      (assert (equal? line1 (format "~a: line 2: indentation differs (2 lines)" bad)))
+      (assert (equal? line2 (format "~a: line 2: indentation differs (1 line)" one)))
+      (assert (equal? bad-text (utf8->string (read-file bad))))
+      (assert (not (file-exists? (string-append bad "~"))))))))
