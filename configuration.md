@@ -2,6 +2,8 @@
 
 A user may customize how Swish-Lint runs personally, or for a whole project.
 
+A configuration file that can't be read, or an entry that fails or isn't recognized, is reported on stderr and, in an editor, as a message from the language server. An entry that fails or isn't recognized is skipped, and the other entries still apply.
+
 When creating a new configuration or an external checker, it is useful to set the environment variable `SWISH_LINT_TRACE=yes` and run from the command-line to get additional diagnostics on stderr.
 
 ## User-level
@@ -39,7 +41,7 @@ This form checks for a single regular expression and reports lint of a specific 
 
 #### `(external cmd . args)`
 
-After saving a file, Swish-Lint may spawn an external process to perform additional checks. The external program should be able to ignore most of the details of LSP to focus on the specific task at hand.
+When a file is opened or saved, Swish-Lint may spawn an external process to perform additional checks. The external program should be able to ignore most of the details of LSP to focus on the specific task at hand.
 
 Swish-Lint will replace references to the symbol `filename` within `args` with the filename to check. Alternately, `(filename regexp)` can be used. The checker will only run if the filename matches the provided `regexp`.
 
@@ -68,6 +70,15 @@ As an example, a simple my-checker program might look like the following:
   [type "info"]
   [message (format "args: ~s" (command-line-arguments))]))
 ```
+
+A checker may exit with a nonzero status when it reports problems. A run counts as failed when:
+
+- the program can't be started,
+- it exits with a nonzero status without reporting anything,
+- it's stopped by a signal, or
+- it produces no output for 5 seconds. Swish-Lint then sends it SIGTERM and stops waiting for it, though the program may keep running.
+
+A failed run adds one warning on the file's first line, "external checker *name* failed; see the log". The reason is written to Swish-Lint's stderr, which an editor shows in its log for the language server. The checker's own stderr is copied there too.
 
 ## Project-level
 
