@@ -1030,6 +1030,7 @@
         ;; Simulate a new, empty tower, and drop the connection.
         (transaction 'log-db
           (execute "delete from refs")
+          (execute "delete from ref_sets")
           (execute "delete from roots"))
         (tower-client:disconnect)
 

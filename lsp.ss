@@ -384,9 +384,20 @@
            [regexp-pass 1])))
       (or (defns-anno) (defns-re))
       (or (refs-anno) (refs-re))
-      (tower-client:update-references filename
-        (vector->list (hashtable-values refs)))
+      ;; Sorted, the refs always encode the same way, so the tower can
+      ;; tell from their hash that they haven't changed.
+      (let ([refs
+             (map cdr
+               (sort (lambda (x y) (string<? (car x) (car y)))
+                 (vector->list (hashtable-cells refs))))])
+        (tower-client:update-references filename refs (refs-hash refs)))
       (event-mgr:notify (cons 'test-sync uri))))
+
+  (define (refs-hash refs)
+    (let ([digest (open-digest 'SHA1)])
+      (on-exit (close-digest digest)
+        (hash! digest (string->utf8 (json:object->string refs)))
+        (hash->hex-string (get-hash digest)))))
 
   (define (spawn-update-refs uri annotated-code source-table text)
     (spawn&link
