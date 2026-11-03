@@ -413,51 +413,34 @@
           (tower-client:get-completions (uri->abs-path uri) line char prefix))]
        [else '()])))
 
-  (define (get-definitions doc uri line char)
-    (let ([line (+ line 1)]             ; LSP is 0-based
-          [char (+ char 1)])
-      (map
-       (lambda (defn)
-         (let ([uri (abs-path->uri (json:ref defn 'filename #f))]
-               [line (- (json:ref defn 'line #f) 1)] ; LSP is 0-based
-               [char (- (json:ref defn 'char #f) 1)]
-               [len (json:ref defn 'len #f)])
-           (make-location uri
-             (make-range
-              (make-pos line char)
-              (make-pos line (+ char len))))))
-       (tower-client:get-definitions (uri->abs-path uri) line char))))
+  ;; The LSP range of a name the tower found, from its line, char and
+  ;; len. The tower's line and char are 1-based, and LSP's are 0-based.
+  (define (tower->range x)
+    (let ([line0 (- (json:get x 'line) 1)]
+          [char0 (- (json:get x 'char) 1)])
+      (make-range
+       (make-pos line0 char0)
+       (make-pos line0 (+ char0 (json:get x 'len))))))
 
-  (define (get-references doc uri line char)
-    (let ([line (+ line 1)]             ; LSP is 0-based
-          [char (+ char 1)])
-      (map
-       (lambda (ref)
-         (let ([uri (abs-path->uri (json:ref ref 'filename #f))]
-               [line (- (json:ref ref 'line #f) 1)] ; LSP is 0-based
-               [char (- (json:ref ref 'char #f) 1)]
-               [len (json:ref ref 'len #f)])
-           (make-location uri
-             (make-range
-              (make-pos line char)
-              (make-pos line (+ char len))))))
-       (tower-client:get-references (uri->abs-path uri) line char))))
+  (define (tower->location x)
+    (make-location (abs-path->uri (json:get x 'filename))
+      (tower->range x)))
 
-  (define (highlight-references doc uri line char)
-    (let ([line (+ line 1)]             ; LSP is 0-based
-          [char (+ char 1)])
-      (map
-       (lambda (ref)
-         (let ([line (- (json:ref ref 'line #f) 1)] ; LSP is 0-based
-               [char (- (json:ref ref 'char #f) 1)]
-               [len (json:ref ref 'len #f)])
-           (json:make-object
-            [kind 1]                    ; Text
-            [range
-             (make-range
-              (make-pos line char)
-              (make-pos line (+ char len)))])))
-       (tower-client:get-local-references (uri->abs-path uri) line char))))
+  (define (get-definitions doc uri line0 char0)
+    (map tower->location
+      (tower-client:get-definitions (uri->abs-path uri) (+ line0 1) (+ char0 1))))
+
+  (define (get-references doc uri line0 char0)
+    (map tower->location
+      (tower-client:get-references (uri->abs-path uri) (+ line0 1) (+ char0 1))))
+
+  (define (highlight-references doc uri line0 char0)
+    (map
+     (lambda (ref)
+       (json:make-object
+        [kind 1]                        ; Text
+        [range (tower->range ref)]))
+     (tower-client:get-local-references (uri->abs-path uri) (+ line0 1) (+ char0 1))))
 
   (define (indent-range doc range options)
     (let* ([start (or (and range (json:ref range '(start line) #f)) 0)]
@@ -564,7 +547,7 @@
       (match (try (folding-ranges (doc:text doc) limit))
         [`(catch ,reason)
          (trace-expr `(folding-ranges => ,(exit-reason->english reason)))
-         '()]
+         json-null]
         [,ranges
          (map
           (lambda (r)
@@ -640,7 +623,7 @@
           (map doc-symbol->lsp (rebuild-symbols symbols))))
        [`(catch ,reason)
         (trace-expr `(get-symbols => ,(exit-reason->english reason)))
-        '()]
+        json-null]
        [,result result])))
 
   ;; A file that can't be opened is skipped, so that one file doesn't
@@ -1047,6 +1030,23 @@
         [`(catch ,_) #f]
         [,filename filename]))
 
+    ;; Answers a request about a document with (f doc uri), in a worker.
+    ;; A document that isn't open has no result.
+    (define (on-doc params state f)
+      (let ([uri (json:get params '(textDocument uri))])
+        (cond
+         [(ht:ref ($state uri->doc) uri #f) =>
+          (lambda (doc) `#(spawn ,(lambda () (f doc uri)) ,state))]
+         [else `#(ok ,json-null ,state)])))
+
+    ;; Like on-doc, with the request's 0-based position:
+    ;; (f doc uri line0 char0).
+    (define (on-position params state f)
+      (let ([line0 (json:get params '(position line))]
+            [char0 (json:get params '(position character))])
+        (on-doc params state
+          (lambda (doc uri) (f doc uri line0 char0)))))
+
     (define (handle-request id method params state)
       (match method
         ["initialize"
@@ -1106,103 +1106,43 @@
         ["textDocument/hover"
          `#(ok #f ,state)]
         ["textDocument/completion"
-         (let ([uri (json:get params '(textDocument uri))]
-               [line (json:get params '(position line))]
-               [char (json:get params '(position character))])
-           (cond
-            [(ht:ref ($state uri->doc) uri #f) =>
-             (lambda (doc)
-               `#(spawn ,(lambda () (get-completions doc uri line char)) ,state))]
-            [else `#(ok () ,state)]))]
+         (on-position params state get-completions)]
         ["textDocument/definition"
-         (let ([uri (json:get params '(textDocument uri))]
-               [line (json:get params '(position line))]
-               [char (json:get params '(position character))])
-           (cond
-            [(ht:ref ($state uri->doc) uri #f) =>
-             (lambda (doc)
-               `#(spawn ,(lambda () (get-definitions doc uri line char)) ,state))]
-            [else `#(ok () ,state)]))]
+         (on-position params state get-definitions)]
         ["textDocument/references"
-         (let ([uri (json:get params '(textDocument uri))]
-               [line (json:get params '(position line))]
-               [char (json:get params '(position character))])
-           (cond
-            [(ht:ref ($state uri->doc) uri #f) =>
-             (lambda (doc)
-               `#(spawn ,(lambda () (get-references doc uri line char)) ,state))]
-            [else `#(ok () ,state)]))]
+         (on-position params state get-references)]
         ["textDocument/documentHighlight"
-         (let ([uri (json:get params '(textDocument uri))]
-               [line (json:get params '(position line))]
-               [char (json:get params '(position character))])
-           (cond
-            [(ht:ref ($state uri->doc) uri #f) =>
-             (lambda (doc)
-               `#(spawn ,(lambda () (highlight-references doc uri line char)) ,state))]
-            [else `#(ok () ,state)]))]
+         (on-position params state highlight-references)]
         ["textDocument/formatting"
-         (let ([uri (json:get params '(textDocument uri))]
-               [options (json:get params 'options)])
-           (cond
-            [(ht:ref ($state uri->doc) uri #f) =>
-             (lambda (doc)
-               `#(spawn ,(lambda () (indent-range doc #f options)) ,state))]
-            [else `#(ok () ,state)]))]
+         (let ([options (json:get params 'options)])
+           (on-doc params state
+             (lambda (doc uri) (indent-range doc #f options))))]
         ["textDocument/rangeFormatting"
-         (let ([uri (json:get params '(textDocument uri))]
-               [range (json:get params 'range)]
+         (let ([range (json:get params 'range)]
                [options (json:get params 'options)])
-           (cond
-            [(ht:ref ($state uri->doc) uri #f) =>
-             (lambda (doc)
-               `#(spawn ,(lambda () (indent-range doc range options)) ,state))]
-            [else `#(ok () ,state)]))]
+           (on-doc params state
+             (lambda (doc uri) (indent-range doc range options))))]
         ["textDocument/foldingRange"
-         (let* ([uri (json:get params '(textDocument uri))]
-                [limit (json:ref ($state client-cap)
+         (let* ([limit (json:ref ($state client-cap)
                          '(textDocument foldingRange rangeLimit) #f)]
                 [limit (and (fixnum? limit) (fx>= limit 0) limit)])
-           (cond
-            [(ht:ref ($state uri->doc) uri #f) =>
-             (lambda (doc)
-               `#(spawn ,(lambda () (get-folding-ranges doc limit)) ,state))]
-            [else `#(ok () ,state)]))]
+           (on-doc params state
+             (lambda (doc uri) (get-folding-ranges doc limit))))]
         ["textDocument/semanticTokens/range"
-         (let ([uri (json:get params '(textDocument uri))]
-               [range (json:get params 'range)]
+         (let ([range (json:get params 'range)]
                [semtok-mode ($state semtok-mode)])
-           (cond
-            [(ht:ref ($state uri->doc) uri #f) =>
-             (lambda (doc)
-               `#(spawn ,(lambda () (get-semantic-tokens doc uri range semtok-mode)) ,state))]
-            [else `#(ok ,json-null ,state)]))]
+           (on-doc params state
+             (lambda (doc uri) (get-semantic-tokens doc uri range semtok-mode))))]
         ["textDocument/semanticTokens/full"
-         (let ([uri (json:get params '(textDocument uri))]
-               [semtok-mode ($state semtok-mode)])
-           (cond
-            [(ht:ref ($state uri->doc) uri #f) =>
-             (lambda (doc)
-               `#(spawn ,(lambda () (get-semantic-tokens doc uri #f semtok-mode)) ,state))]
-            [else `#(ok ,json-null ,state)]))]
+         (let ([semtok-mode ($state semtok-mode)])
+           (on-doc params state
+             (lambda (doc uri) (get-semantic-tokens doc uri #f semtok-mode))))]
         ["textDocument/documentSymbol"
-         (let ([uri (json:get params '(textDocument uri))])
-           (cond
-            [(ht:ref ($state uri->doc) uri #f) =>
-             (lambda (doc)
-               `#(spawn ,(lambda () (get-symbols doc uri)) ,state))]
-            [else `#(ok () ,state)]))]
+         (on-doc params state get-symbols)]
         ["textDocument/onTypeFormatting"
-         (let ([uri (json:get params '(textDocument uri))]
-               [ch (json:get params 'ch)]
-               ;;[options (json:get params 'options)]
-               [line (json:get params '(position line))]
-               [char (json:get params '(position character))])
-           (cond
-            [(ht:ref ($state uri->doc) uri #f) =>
-             (lambda (doc)
-               `#(spawn ,(lambda () (format-on-type doc (string-ref ch 0) line char)) ,state))]
-            [else `#(ok () ,state)]))]
+         (let ([ch (string-ref (json:get params 'ch) 0)])
+           (on-position params state
+             (lambda (doc uri line0 char0) (format-on-type doc ch line0 char0))))]
         ["shutdown"
          `#(ok ,json-null ,($state copy [shutdown-requested? #t]))]
         [,_
