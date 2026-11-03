@@ -1611,6 +1611,46 @@
         (did-close uri)
         'ok))))
 
+(isolate-mat semantic-tokens-range ()
+  ;; A range's end is exclusive: one that ends at character 0 of a line
+  ;; doesn't cover that line, and an empty one there covers nothing.
+  (define (lines-with-tokens uri start-line0 start-char0 end-line0 end-char0)
+    ;; Each token is 5 numbers, the first its line's offset from the
+    ;; previous token's.
+    (let lp ([data
+              (json:get
+               (rpc-client:call 'rpc
+                 (json:make-object
+                  [jsonrpc "2.0"]
+                  [method "textDocument/semanticTokens/range"]
+                  [params
+                   (json:make-object
+                    [textDocument (json:make-object [uri uri])]
+                    [range
+                     (json:make-object
+                      [start (json:make-object [line start-line0] [character start-char0])]
+                      [end (json:make-object [line end-line0] [character end-char0])])])]))
+               'data)]
+             [line0 0]
+             [lines '()])
+      (match data
+        [() (reverse lines)]
+        [(,delta ,_ ,_ ,_ ,_ . ,rest)
+         (let ([line0 (+ line0 delta)])
+           (lp rest line0
+             (if (and (pair? lines) (= (car lines) line0))
+                 lines
+                 (cons line0 lines))))])))
+  (let ([rpc (start-lsp-server #f)])
+    (on-exit (stop-lsp-server rpc)
+      (let ([uri "file:///tmp/semtok-range.ss"])
+        (did-open uri "(define x 1)\n(define y 2)\n")
+        (match-let*
+         ([(0) (lines-with-tokens uri 0 0 1 0)]
+          [(0 1) (lines-with-tokens uri 0 0 1 5)]
+          [() (lines-with-tokens uri 1 0 1 0)])
+         (did-close uri))))))
+
 (isolate-mat formatting ()
   (define (extract-edits ls)
     (map

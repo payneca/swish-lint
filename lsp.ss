@@ -442,30 +442,38 @@
         [range (tower->range ref)]))
      (tower-client:get-local-references (uri->abs-path uri) (+ line0 1) (+ char0 1))))
 
+  ;; Returns the first and last 0-based lines an LSP range covers, or
+  ;; the whole document when range is #f. The end position is
+  ;; exclusive, so a range that ends at character 0 doesn't cover that
+  ;; line, and an empty range there covers none: the last line is then
+  ;; before the first.
+  (define (range->lines0 range)
+    (if range
+        (let ([start-line0 (json:get range '(start line))]
+              [end-line0 (json:get range '(end line))])
+          (values start-line0
+            (if (eqv? (json:get range '(end character)) 0)
+                (- end-line0 1)
+                end-line0)))
+        (values 0 (fx- (most-positive-fixnum) 1))))
+
   (define (indent-range doc range options)
-    (let* ([start (or (and range (json:ref range '(start line) #f)) 0)]
-           [end (or (and range (json:ref range '(end line) #f))
-                    (fx- (most-positive-fixnum) 1))]
-           ;; The end position is exclusive, so a range that ends at
-           ;; character 0 does not include that line.
-           [end (if (eqv? (and range (json:ref range '(end character) #f)) 0)
-                    (- end 1)
-                    end)])
+    (let-values ([(start-line0 end-line0) (range->lines0 range)])
       (trace-time 'indent
-        (if (< end start)
+        (if (< end-line0 start-line0)
             '()
             (reverse
-             (fold-indent (doc:text doc) (+ start 1) (+ end 1) '()
-               (lambda (line old new acc)
-                 (let ([line (- line 1)]) ; LSP is 0-based
-                   (if (and (<= start line end)
+             (fold-indent (doc:text doc) (+ start-line0 1) (+ end-line0 1) '()
+               (lambda (line1 old new acc)
+                 (let ([line0 (- line1 1)])
+                   (if (and (<= start-line0 line0 end-line0)
                             (not (string=? old new)))
                        (cons
                         (make-text-edit
                          (make-range
-                          (make-pos line 0)
-                          (make-pos line (max (string-length old)
-                                              (string-length new))))
+                          (make-pos line0 0)
+                          (make-pos line0 (max (string-length old)
+                                               (string-length new))))
                          new)
                         acc)
                        acc)))))))))
@@ -526,9 +534,10 @@
   (define (get-semantic-tokens doc uri range semtok-mode)
     (trace-time 'semantic-tokens
       (match (try
-              (let ([start (or (and range (json:ref range '(start line) #f)) 0)]
-                    [end (or (and range (json:ref range '(end line) #f)) (fx- (most-positive-fixnum) 1))])
-                (semtok:encode (doc:text doc) start end semtok-mode)))
+              (let-values ([(start-line0 end-line0) (range->lines0 range)])
+                (if (< end-line0 start-line0)
+                    '()
+                    (semtok:encode (doc:text doc) start-line0 end-line0 semtok-mode))))
         [`(catch ,reason)
          (trace-expr `(semantic-tokens => ,(exit-reason->english reason)))
          json-null]
