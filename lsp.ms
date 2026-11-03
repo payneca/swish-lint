@@ -757,7 +757,7 @@
   (let ([rpc (start-lsp-server (get-real-path "."))])
     (on-exit (stop-lsp-server rpc)
       (wait-for-keywords)
-      (assert (null? (get-completions "file:///tmp/does-not-exist.ss" 0 0)))
+      (assert (eq? json-null (get-completions "file:///tmp/does-not-exist.ss" 0 0)))
       (let ([uri "file:///tmp/foo.ss"])
         (did-open uri "")
         (all uri "1" '(() ()))
@@ -874,9 +874,9 @@
     (on-exit (stop-lsp-server rpc)
       (define wait-for-test-sync (capture-test-sync))
 
-      (assert (null? (get-defns "file:///tmp/does-not-exist.ss" 0 0)))
-      (assert (null? (get-local-refs "file:///tmp/does-not-exist.ss" 0 0)))
-      (assert (null? (get-refs "file:///tmp/does-not-exist.ss" 0 0)))
+      (assert (eq? json-null (get-definitions "file:///tmp/does-not-exist.ss" 0 0)))
+      (assert (eq? json-null (get-highlights "file:///tmp/does-not-exist.ss" 0 0)))
+      (assert (eq? json-null (get-references "file:///tmp/does-not-exist.ss" 0 0)))
       (let* ([uri1 "file:///tmp/file1.ss"]
              [uri2 "file:///tmp/file2.ss"]
              [uris (list uri1 uri2)])
@@ -1145,7 +1145,8 @@
         (did-open uri (code "(let ()" "(f))" ""))
         (match-let* ([(,_) (format-document uri)]) 'ok)
         (did-close uri)
-        (match-let* ([() (format-document uri)]) 'ok)))))
+        ;; A closed document isn't the server's to format.
+        (assert (eq? json-null (format-document uri)))))))
 
 (isolate-mat did-close-diagnostics ()
   ;; Closing a file clears its diagnostics in the client.
@@ -1621,8 +1622,8 @@
     (on-exit (stop-lsp-server rpc)
       (define wait-for-test-sync (capture-test-sync))
 
-      (assert (null? (format-document "file:///tmp/does-not-exist.ss")))
-      (assert (null? (format-range "file:///tmp/does-not-exist.ss" 0 0 1 0)))
+      (assert (eq? json-null (format-document "file:///tmp/does-not-exist.ss")))
+      (assert (eq? json-null (format-range "file:///tmp/does-not-exist.ss" 0 0 1 0)))
       (let ([uri "file:///tmp/foo.ss"])
         (did-open uri
           (code
@@ -1800,7 +1801,7 @@
           (did-change uri text)
           (wait-for-test-sync uri)
           (extract-edits (format-on-type uri ch line0 char0)))
-        (assert (null? (format-on-type "file:///tmp/does-not-exist.ss" "\n" 1 0)))
+        (assert (eq? json-null (format-on-type "file:///tmp/does-not-exist.ss" "\n" 1 0)))
         (did-open uri "")
         (wait-for-test-sync uri)
         (match-let*
@@ -1970,7 +1971,12 @@
     (on-exit (stop-lsp-server rpc)
       (define wait-for-test-sync (capture-test-sync))
 
-      (assert (null? (get-symbols "file:///tmp/does-not-exist.ss")))
+      (assert (eq? json-null (get-symbols "file:///tmp/does-not-exist.ss")))
+      ;; Code that doesn't read has no result, rather than no symbols.
+      (let ([uri "file:///tmp/unread.ss"])
+        (did-open uri "(define (f x)\n  (+ x")
+        (assert (eq? json-null (get-symbols uri)))
+        (did-close uri))
       (let* ([uri "file:///tmp/foo.ss"]
              [text (utf8->string
                     (read-file
@@ -2027,23 +2033,27 @@
          'ok)))))
 
 ;; Returns each range as (start end kind).
+;; Returns each range as (start end kind), or null when there's no result.
 (define (get-folding-ranges uri)
-  (map
-   (lambda (r)
-     (list (json:get r 'startLine) (json:get r 'endLine)
-       (json:ref r 'kind #f)))
-   (rpc-client:call 'rpc
-     (json:make-object
-      [jsonrpc "2.0"]
-      [method "textDocument/foldingRange"]
-      [params
-       (json:make-object
-        [textDocument (json:make-object [uri uri])])]))))
+  (match (rpc-client:call 'rpc
+           (json:make-object
+            [jsonrpc "2.0"]
+            [method "textDocument/foldingRange"]
+            [params
+             (json:make-object
+              [textDocument (json:make-object [uri uri])])]))
+    [,@json-null json-null]
+    [,ranges
+     (map
+      (lambda (r)
+        (list (json:get r 'startLine) (json:get r 'endLine)
+          (json:ref r 'kind #f)))
+      ranges)]))
 
 (isolate-mat folding-ranges ()
   (let ([rpc (start-lsp-server #f)])
     (on-exit (stop-lsp-server rpc)
-      (assert (null? (get-folding-ranges "file:///tmp/does-not-exist.ss")))
+      (assert (eq? json-null (get-folding-ranges "file:///tmp/does-not-exist.ss")))
       (let ([uri "file:///tmp/fold.ss"])
         (did-open uri
           (code
