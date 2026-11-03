@@ -404,15 +404,17 @@
        (json:make-object
         [keywords keywords])])))
 
-  (define (tower-client:update-references filename refs)
-    ;; Refs is a list of JSON objects containing: name, line, char, meta
+  (define (tower-client:update-references filename refs hash)
+    ;; Refs is a list of JSON objects containing: name, line, char, meta.
+    ;; Hash identifies them, so the tower can skip refs it already has.
     (tower-client:call
      (json:make-object
       [method "update-references"]
       [params
        (json:make-object
         [filename filename]
-        [references refs])])))
+        [references refs]
+        [hash hash])])))
 
   (define (tower-client:shutdown-server)
     (tower-client:call

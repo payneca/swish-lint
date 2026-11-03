@@ -107,6 +107,13 @@ where F.filename=?" filename)
      [filename filename]
      [references refs])))
 
+(define (update/hash ws filename refs hash)
+  (tower-call ws "update-references"
+    (json:make-object
+     [filename filename]
+     [references refs]
+     [hash hash])))
+
 (define (ref name line char defn?)
   (json:make-object
    [name name]
@@ -253,6 +260,44 @@ where F.filename=?" filename)
           ["ok" (update ws a.ss (list (ref "ty-def" 0 8 #t)))]
           [() (completions ws a.ss 0 14 "ty-def")])
          (ws:close ws))))))
+
+;; The tower skips refs whose hash it already has for the file in the
+;; client's root. Each case sends refs that don't match the hash, so the
+;; count shows whether the tower stored them.
+(isolate-mat unchanged-refs ()
+  (let ([port (start-tower)]
+        [fn "/tmp/root-a/same.ss"]
+        [two (list (ref "two" 0 1 #f) (ref "two" 1 1 #f))]
+        [one (list (ref "one" 0 1 #f))])
+    (on-exit (stop-tower)
+      (let ([a (connect port)]
+            [b (connect port)])
+        (match-let*
+         (["ok" (reset-directory a "/tmp/root-a")]
+          ["ok" (reset-directory b "/tmp/root-b")]
+          ["ok" (update/hash a fn two "h1")]
+          [2 (file-ref-count fn)]
+          ;; Same hash: skipped.
+          ["ok" (update/hash a fn one "h1")]
+          [2 (file-ref-count fn)]
+          ;; New hash: stored.
+          ["ok" (update/hash a fn one "h2")]
+          [1 (file-ref-count fn)]
+          ;; Without a hash, the refs are stored and the hash forgotten.
+          ["ok" (update a fn two)]
+          [2 (file-ref-count fn)]
+          ["ok" (update/hash a fn one "h2")]
+          [1 (file-ref-count fn)]
+          ;; A reset deletes the root's refs and their hashes.
+          ["ok" (reset-directory a "/tmp/root-a")]
+          [0 (file-ref-count fn)]
+          ["ok" (update/hash a fn two "h2")]
+          [2 (file-ref-count fn)]
+          ;; Another root's client replaces the refs.
+          ["ok" (update/hash b fn one "h2")]
+          [1 (file-ref-count fn)])
+         (ws:close a)
+         (ws:close b))))))
 
 (isolate-mat missing-root ()
   ;; A client that never sets a root still gets answers about its own
