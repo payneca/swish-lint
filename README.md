@@ -19,7 +19,10 @@ Features include:
 
 ## Build Requirements
 
-- [Swish](https://github.com/becls/swish) 2.6 or later built using Chez Scheme 9.6.4 or later
+- [Swish](https://github.com/becls/swish) 2.8.1 built using Chez Scheme 10.4.1
+
+These are the versions Swish-Lint is tested with and supported on.
+Other versions may work, but they aren't tested.
 
 ## Build
 
@@ -33,7 +36,7 @@ Features include:
 
 ### Configure Emacs
 
-1. Install [lsp-mode 8.0.0](https://emacs-lsp.github.io/lsp-mode/)
+1. Install [lsp-mode 9.0.0](https://emacs-lsp.github.io/lsp-mode/)
 
 2. Install [lsp-ui 8.0.0](https://emacs-lsp.github.io/lsp-ui/)
 
@@ -72,18 +75,28 @@ e.g., .emacs.d/init.el or .emacs file:
 (setq read-process-output-max (* 1024 1024))
 
 (add-to-list 'load-path "~/.emacs.d/swish-lint")
-(add-to-list 'exec-path "~/.emacs.d/swish-lint")
 (require 'lsp-swish)
+(add-hook 'scheme-mode-hook #'lsp-deferred)
 ```
 
-To use Swish-Lint's indentation, bind `swish-indent-sexp` in your
+The last line starts Swish-Lint in every Scheme buffer. To use it only
+in some projects, call `lsp` from those buffers instead.
+
+Emacs runs `swish-lint` from your `PATH`. To run it from somewhere
+else, set `lsp-swish-server-command`:
+
+```
+(setq lsp-swish-server-command '("/path/to/swish-lint" "--lsp"))
+```
+
+To use Swish-Lint's indentation, bind `lsp-swish-indent-sexp` in your
 scheme mode hook:
 
 ```
 (add-hook 'scheme-mode-hook
   (function
    (lambda ()
-     (local-set-key (kbd "C-M-q") 'swish-indent-sexp))))
+     (local-set-key (kbd "C-M-q") 'lsp-swish-indent-sexp))))
 ```
 
 ## Customize Configuration

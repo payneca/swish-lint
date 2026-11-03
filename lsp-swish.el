@@ -21,6 +21,17 @@
 ;;; WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 ;;; OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 ;;; DEALINGS IN THE SOFTWARE.
+;;;
+;;; URL: https://github.com/becls/swish-lint
+;;; Keywords: languages, tools
+;;; Package-Requires: ((emacs "27.1") (lsp-mode "9.0.0"))
+
+;;; Commentary:
+
+;;; Registers Swish-Lint with lsp-mode as the language server for Swish
+;;; and Chez Scheme code.  See README.md for setup.
+
+;;; Code:
 
 (require 'lsp-mode)
 
@@ -30,7 +41,13 @@
   :link '(url-link "https://github.com/becls/swish-lint")
   :prefix "lsp-swish-")
 
-(defun swish-indent-sexp ()
+(defcustom lsp-swish-server-command '("swish-lint" "--lsp")
+  "Command and arguments that start the Swish-Lint language server."
+  :type '(repeat string)
+  :risky t
+  :group 'lsp-swish)
+
+(defun lsp-swish-indent-sexp ()
   "Indent each line of the sexp starting just after point."
   (interactive)
   (save-excursion
@@ -102,9 +119,8 @@ that have modifiers."
 
 (lsp-register-client
  (make-lsp-client
-  :new-connection (lsp-stdio-connection
-                   '("swish-lint" "--lsp"))
-  :major-modes '(scheme-mode)
+  :new-connection (lsp-stdio-connection (lambda () lsp-swish-server-command))
+  :activation-fn (lsp-activate-on "scheme")
   :server-id 'swish-ls
   :initialized-fn (lambda (workspace)
                     (with-lsp-workspace workspace
@@ -117,6 +133,7 @@ that have modifiers."
     :modifiers ,lsp-swish-semantic-token-modifier-faces
     :types ,lsp-swish-semantic-token-faces)))
 
-(add-hook 'scheme-mode-hook #'lsp)
+(lsp-consistency-check lsp-swish)
 
 (provide 'lsp-swish)
+;;; lsp-swish.el ends here
