@@ -145,10 +145,10 @@
   ;; Basic input cases
   (match-let*
    ([,simple (code "this is some code\n")]
-    [`(catch #(bad-arg open-token-string not-a-string)) (try (tokenize 'not-a-string 0 0))]
-    [`(catch #(bad-arg open-token-string 0)) (try (tokenize simple 0 0))]
-    [`(catch #(bad-arg open-token-string 0)) (try (tokenize simple 1 0))]
-    [`(catch #(bad-arg open-token-string 9)) (try (tokenize simple 10 9))])
+    [`(catch #(bad-arg parse not-a-string)) (try (tokenize 'not-a-string 0 0))]
+    [`(catch #(bad-arg parse 0)) (try (tokenize simple 0 0))]
+    [`(catch #(bad-arg parse 0)) (try (tokenize simple 1 0))]
+    [`(catch #(bad-arg parse 9)) (try (tokenize simple 10 9))])
    'ok)
 
   ;; Scripts that start with #! are special
