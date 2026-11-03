@@ -530,6 +530,52 @@
      [method "initialized"]
      [params (json:make-object)])))
 
+(isolate-mat config-problems ()
+  ;; A configuration file that can't be used is reported to the user,
+  ;; since the editor only logs stderr.
+  (with-tmp-dir
+   (let* ([fn (path-combine (tmp-dir) ".swish" "swish-lint.ss")]
+          [root-uri (abs-path->uri (tmp-dir))]
+          [rpc (start-uninitialized-lsp-server)]
+          [wait-for-progress (capture-progress)])
+     (on-exit (stop-lsp-server rpc)
+       (write-text fn "(definition-keywords 12)\n(no-such-setting)\n")
+       (rpc-client:set-event-handler 'rpc 'show-message
+         (lambda (event)
+           (and (equal? (json:ref event 'method #f) "window/showMessage")
+                (json:get event 'params)))
+         self)
+       (rpc-client:call rpc
+         (json:make-object
+          [jsonrpc "2.0"]
+          [method "initialize"]
+          [params
+           (json:make-object
+            [rootUri root-uri]
+            [capabilities (client-capabilities)])]))
+       (rpc-client:notify rpc
+         (json:make-object
+          [jsonrpc "2.0"]
+          [method "initialized"]
+          [params (json:make-object)]))
+       ;; The server names the file it found from the root URI, which
+       ;; on Windows has / where fn has \.
+       (let ([prefix
+              (format "project configuration ~a: "
+                (path-combine (uri->abs-path root-uri) ".swish" "swish-lint.ss"))])
+         (for-each
+          (lambda (expected)
+            (receive (after 5000 (throw `#(no-message ,expected)))
+              [,params
+               (guard (json:object? params))
+               (assert (eqv? (json:get params 'type) 2))
+               (assert (equal? (json:get params 'message)
+                         (string-append prefix expected)))]))
+          '("definition-keywords must all be strings"
+            "ignoring (no-such-setting)")))
+       ;; Let indexing finish before the directory is deleted.
+       (wait-for-progress "enumerate-directories")))))
+
 (isolate-mat progress-token ()
   ;; Progress uses a token the client created first.
   (let ([rpc (start-uninitialized-lsp-server)])

@@ -38,7 +38,6 @@
    (folding)
    (indent)
    (json)
-   (keywords)
    (progress)
    (read)
    (semtok)
@@ -100,10 +99,11 @@
       (lambda (pid)
         (send pid `#(send-msg ,msg)))]))
 
-  (define (lsp:log type msg)
+  ;; Shows msg to the user, as a notification in most editors.
+  (define (lsp:show-message type msg)
     (unless (string? msg)
-      (bad-arg 'lsp:log msg))
-    (rpc:fire-event "window/logMessage"
+      (bad-arg 'lsp:show-message msg))
+    (rpc:fire-event "window/showMessage"
       (json:make-object
        [type
         (match type
@@ -797,8 +797,8 @@
       client-cap
       requests
       semtok-mode
+      shutdown-requested?
       )
-    (define shutdown-requested? #f)
 
     (define (init)
       `#(ok ,(<lsp-server> make
@@ -813,6 +813,7 @@
                [client-cap #f]
                [requests (ht:make string-hash string=? string?)]
                [semtok-mode 'full]
+               [shutdown-requested? #f]
                )))
     (define (terminate reason state) 'ok)
     ;; params is optional. Without it, or when it isn't an object, a
@@ -1203,8 +1204,7 @@
                `#(spawn ,(lambda () (format-on-type doc (string-ref ch 0) line char)) ,state))]
             [else `#(ok () ,state)]))]
         ["shutdown"
-         (set! shutdown-requested? #t)
-         `#(ok ,json-null ,state)]
+         `#(ok ,json-null ,($state copy [shutdown-requested? #t]))]
         [,_
          (fprintf (console-error-port) "*** Unhandled message ~s ***\n" method)
          (trace-msg (json:make-object [id id] [method method] [params params]))
@@ -1231,10 +1231,14 @@
         ["initialized"
          ;; Always load the user configuration event if root-dir is
          ;; not specified.
-         (output-env)
-         (config:load-user)
-         (cond
-          [($state root-dir) => config:load-project])
+         ;; A broken configuration would otherwise go unnoticed, since
+         ;; the editor only logs stderr.
+         (parameterize ([config-error
+                         (lambda (msg) (lsp:show-message 'warning msg))])
+           (output-env)
+           (config:load-user)
+           (cond
+            [($state root-dir) => config:load-project]))
          (index-project state)]
         ["textDocument/didOpen"
          (let ([doc (json:get params 'textDocument)])
@@ -1293,7 +1297,7 @@
                     id
                     (lambda (msg state) state))]))]))]
         ["$/setTrace" state]
-        ["exit" (app:shutdown (if shutdown-requested? 0 1))]
+        ["exit" (app:shutdown (if ($state shutdown-requested?) 0 1))]
         [,_
          (fprintf (console-error-port) "*** Unhandled message ~s ***\n" method)
          (trace-msg (json:make-object [method method] [params params]))
