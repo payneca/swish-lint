@@ -7,15 +7,15 @@ straightforward to add new forms.  This code does not currently
 provide "options" as we'd like to apply the same rules to all
 code. This may change.
 
-This indenter uses regular expressions to define delimiters in the
-file. This allows it to track both code and comments. Generally, it
+This indenter reads tokens with Chez Scheme's `read-token`, and uses
+regular expressions for what that skips, such as comments, or can't
+read. This allows it to track both code and comments. Generally, it
 follows this workflow:
 
-* tokenize the input
+* tokenize the input, reading strings, characters, and numbers whole
+  and marking them with those properties
 
-* mark tokens with properties like comments, strings, and numbers
-
-* assemble some tokens like named characters and strings
+* mark block comments and datums commented out with `#;` as comments
 
 * indent code
 
