@@ -183,6 +183,33 @@ substr(F.filename,-3)='.ss' desc, F.filename asc, D.line asc"
         0
         (char->integer (char-downcase (string-ref s 0)))))
 
+  ;; Replaces a file's refs, and records their hash.
+  (define (update-refs file-fk root-fk start hash refs)
+    (db:log 'log-db "delete from refs where file_fk=?" file-fk)
+    (db:log 'log-db "insert into ref_sets(file_fk,root_fk,hash) values(?,?,?) on conflict(file_fk) do update set root_fk=excluded.root_fk, hash=excluded.hash"
+      file-fk (coerce root-fk) (coerce hash))
+    (for-each
+     (lambda (ref)
+       (let* ([meta (json:get ref 'meta)]
+              [name (coerce (json:get ref 'name))]
+              [len (json:get ref 'len)]
+              [uid (json:ref ref 'uid #f)]
+              [uid (or (and uid (coerce uid)) name)])
+         (db:log 'log-db "insert into refs(timestamp,root_fk,file_fk,pre1,name,len,uid,type,line,char,meta) values(?,?,?,?,?,?,?,?,?,?,?)"
+           (coerce start)
+           (coerce root-fk)
+           (coerce file-fk)
+           (coerce (prefix-integer name))
+           name
+           len
+           uid
+           (coerce (and (= (json:ref meta 'definition 0) 1)
+                        "defn"))
+           (coerce (json:get ref 'line))
+           (coerce (json:get ref 'char))
+           (coerce meta))))
+     refs))
+
   (define (handle-message ws msg)
     (match (string->symbol (json:get msg 'method))
       [log
@@ -342,6 +369,7 @@ order by distance is null, distance asc, count desc, candidates.name asc"
                       (coerce (json:make-object))
                       dir)
                     (execute "delete from refs where root_fk=? or root_fk is null" pk)
+                    (execute "delete from ref_sets where root_fk=? or root_fk is null" pk)
                     pk]))])
          (root-key pk)
          (rpc:respond ws msg "ok"))]
@@ -363,36 +391,27 @@ order by distance is null, distance asc, count desc, candidates.name asc"
       [update-references
        (let ([filename (json:get msg '(params filename))]
              [refs (json:get msg '(params references))]
+             [hash (json:ref msg '(params hash) #f)]
              [root-fk (root-key)]
              [start (erlang:now)])
          (assert (path-absolute? filename))
          (db:log 'log-db "insert into files (timestamp,filename) values (?,?) on conflict(filename) do update set timestamp=excluded.timestamp"
            (coerce start)
            (coerce filename))
-         (let ([file-fk (transaction 'log-db
-                          (scalar (execute "select file_pk from files where filename=?" filename)))])
-           (db:log 'log-db "delete from refs where file_fk=?" file-fk)
-           (for-each
-            (lambda (ref)
-              (let* ([meta (json:get ref 'meta)]
-                     [name (coerce (json:get ref 'name))]
-                     [len (json:get ref 'len)]
-                     [uid (json:ref ref 'uid #f)]
-                     [uid (or (and uid (coerce uid)) name)])
-                (db:log 'log-db "insert into refs(timestamp,root_fk,file_fk,pre1,name,len,uid,type,line,char,meta) values(?,?,?,?,?,?,?,?,?,?,?)"
-                  (coerce start)
-                  (coerce root-fk)
-                  (coerce file-fk)
-                  (coerce (prefix-integer name))
-                  name
-                  len
-                  uid
-                  (coerce (and (= (json:ref meta 'definition 0) 1)
-                               "defn"))
-                  (coerce (json:get ref 'line))
-                  (coerce (json:get ref 'char))
-                  (coerce meta))))
-            refs))
+         ;; The client sends a hash of the refs, so a file whose refs
+         ;; this root already stored, as when it's saved after an edit,
+         ;; is left alone.
+         (match (transaction 'log-db
+                  (let ([file-fk (scalar (execute "select file_pk from files where filename=?" filename))])
+                    (if (and hash
+                             (scalar
+                              (execute "select 1 from ref_sets where file_fk=? and root_fk is ? and hash=?"
+                                file-fk (coerce root-fk) hash)))
+                        'unchanged
+                        file-fk)))
+           [unchanged (void)]
+           [,file-fk
+            (update-refs file-fk root-fk start hash refs)])
          (rpc:respond ws msg "ok"))]
       [log-requests
        (let ([root-fk (root-key)])
@@ -550,6 +569,11 @@ order by distance is null, distance asc, count desc, candidates.name asc"
         [timestamp integer]
         [path text]
         [meta text])
+      ;; The hash of the refs the client last sent for each file.
+      (create-table ref_sets
+        [file_fk integer primary key]
+        [root_fk integer]
+        [hash text])
       ;; One row per LSP request, timed by the client: total is the ms
       ;; its worker took.
       (create-table requests
