@@ -22,6 +22,7 @@
 
 (library (config)
   (export
+   config-error
    config-output-port
    config:load-project
    config:load-user
@@ -39,6 +40,19 @@
     (make-parameter
      (make-custom-textual-output-port "bit-sink port"
        (lambda (str start n) n) #f #f #f)))
+
+  ;; Problems in a configuration file are reported here, as well as to
+  ;; config-output-port, so they aren't lost where that port is a sink.
+  (define config-error
+    (make-parameter
+     (lambda (msg)
+       (fprintf (console-error-port) "swish-lint: ~a\n" msg)
+       (flush-output-port (console-error-port)))))
+
+  (define (config-problem fmt . args)
+    (let ([msg (apply format fmt args)])
+      (fprintf (config-output-port) "~a\n" msg)
+      ((config-error) msg)))
 
   (define (output-env)
     (cond
@@ -64,13 +78,13 @@
                           '()
                           (cons x (lp))))))))
         [`(catch ,reason)
-         (fprintf (config-output-port) "~a: ~a\n" who (exit-reason->english reason))]
+         (config-problem "~a configuration ~a: ~a" who path (exit-reason->english reason))]
         [,exprs
          (for-each
           (lambda (expr)
-            (match (try (process-expr expr))
+            (match (try (process-expr path expr))
               [`(catch ,reason)
-               (fprintf (config-output-port) "~a: ~a\n" who (exit-reason->english reason))]
+               (config-problem "~a configuration ~a: ~a" who path (exit-reason->english reason))]
               [,_ (void)]))
           exprs)])]
      [else
@@ -79,14 +93,14 @@
   (define (config:load-project path)
     (let ([fn (path-combine path ".swish" "swish-lint.ss")])
       (load-config 'project fn
-        (lambda (expr)
+        (lambda (path expr)
           (match expr
             [(definition-keywords . ,ls)
              (unless (for-all string? ls)
                (throw "definition-keywords must all be strings"))
              (config:definition-keywords ls)]
             [,_
-             (fprintf (config-output-port) "project: ignoring ~a\n" expr)])))))
+             (config-problem "project configuration ~a: ignoring ~s" path expr)])))))
 
   (define (config:user-dir)
     (cond
@@ -101,7 +115,7 @@
       (lambda (path)
         (let ([fn (path-combine path "swish" "swish-lint.ss")])
           (load-config 'user fn
-            (lambda (expr)
+            (lambda (path expr)
               (match expr
                 [(find-files . ,(ls <= (,cmd . ,args)))
                  (unless (for-all string? ls)
@@ -110,7 +124,7 @@
                 [(optional-checkers . ,ls)
                  (optional-checkers (append (optional-checkers) (make-optional-passes ls)))]
                 [,_
-                 (fprintf (config-output-port) "user: ignoring ~a\n" expr)])))))]))
+                 (config-problem "user configuration ~a: ignoring ~s" path expr)])))))]))
 
   (define (make-optional-passes ls)
     (let lp ([ls ls] [acc '()])

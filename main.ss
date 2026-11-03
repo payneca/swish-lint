@@ -34,7 +34,8 @@
  (software-info)
  (swish imports)
  (tower)
- (tower-client))
+ (tower-client)
+ (trace))
 
 (define tower-port-number
   (cond
@@ -76,6 +77,9 @@
         [() '()]
         [(,type ,regexp . ,rest)
          (cons `(regexp ,type ,regexp) (lp rest))])))
+  ;; Trace output, including an external checker's stderr, would
+  ;; otherwise mix into the report on stdout.
+  (trace-init)
   (cond
    [(opt 'help)
     (display-help (app:name) cli (opt))
@@ -84,6 +88,9 @@
     (display (versions->string))
     (exit 0)]
    [(opt 'doctor)
+    ;; The report includes configuration problems, so they aren't
+    ;; printed again.
+    (config-error (lambda (msg) (void)))
     (config-output-port (console-output-port))
     (trace-output-port (console-output-port))
     (display (versions->string))
