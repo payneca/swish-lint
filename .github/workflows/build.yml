@@ -206,12 +206,22 @@ jobs:
           # to build swish-lint.exe and install the DLLs.
           echo "MAKE_VARS=OS=Windows_NT" >> $GITHUB_ENV
       - name: Build swish-lint
+        id: build
         run: |
           swish --version
           "${MAKE_PROG:-make}" ${MAKE_VARS:-} -C swish-lint
       - name: Run tests
         run: |
           "${MAKE_PROG:-make}" ${MAKE_VARS:-} -C swish-lint test
+      - name: Lint
+        # Run even if the tests failed, but not if the build did.
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          "${MAKE_PROG:-make}" ${MAKE_VARS:-} -C swish-lint lint
+      - name: Check indentation
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          "${MAKE_PROG:-make}" ${MAKE_VARS:-} -C swish-lint check-indent
       - name: Archive test results
         if: ${{ always() }}
         uses: actions/upload-artifact@v6
