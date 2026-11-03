@@ -1,6 +1,7 @@
-.PHONY: all clean coverage install lint test
+.PHONY: all check-indent clean coverage install lint test
 
 SRC := $(shell git ls-files '*.ss')
+MATS := $(shell git ls-files '*.ms')
 INSTALLROOT := ~/.emacs.d/swish-lint
 
 ifeq (Windows_NT,${OS})
@@ -27,6 +28,9 @@ coverage: all
 
 lint: swish-lint${EXESUFFIX} ${SRC}
 	./swish-lint${EXESUFFIX} ${SRC}
+
+check-indent: swish-lint${EXESUFFIX} ${SRC} ${MATS}
+	./swish-lint${EXESUFFIX} --check-indent ${SRC} ${MATS}
 
 # force evaluation, but use a different target from the output that
 # main.ss depends on so we don't rebuild needlessly
