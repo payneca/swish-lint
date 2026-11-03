@@ -203,41 +203,55 @@ substr(F.filename,-3)='.ss' desc, F.filename asc, D.line asc"
                (transaction 'log-db
                  (let ([file-fk (scalar (execute "select file_pk from files where filename=?" filename))]
                        [pre1 (prefix-integer prefix)])
+                   ;; The candidates are the keywords, the names in
+                   ;; this file, and the names defined in other files
+                   ;; of this root, since those are what this file can
+                   ;; see. known: the name is a keyword or defined in
+                   ;; another file.
+                   ;;
                    ;; distance: the weighted distance in lines from the
                    ;; cursor to the nearest reference in this file. A
                    ;; new local is most likely defined above the
-                   ;; cursor, so references below cost more. Names
-                   ;; with no reference in this file have a null
-                   ;; distance and sort after the rest. count: the
-                   ;; name's references in this root, so other
-                   ;; projects don't skew the ranking.
+                   ;; cursor, so references below cost more. count:
+                   ;; the name's references in this file. Names with
+                   ;; no reference in this file are far away, so they
+                   ;; have a null distance and sort by name after the
+                   ;; rest.
                    (execute "
 select
-  min(case when refs.file_fk=?4 then
-        case when refs.line <= ?5 then ?5 - refs.line
-             else (refs.line - ?5) * ?6 end
-      end) as distance
+  min(case when refs.line <= ?5 then ?5 - refs.line
+           else (refs.line - ?5) * ?6 end) as distance
   ,count(refs.name) as count
   ,candidates.name
+  ,candidates.known
 from
-(select keyword as name from keywords where keyword like ?2 escape '\x1B;'
- union
- select name from refs
- where pre1=?1 and name like ?2 escape '\x1B;' and root_fk=?3
+(select name, max(known) as known
+ from
+ (select keyword as name, 1 as known from keywords
+  where keyword like ?2 escape '\x1B;'
+  union all
+  select name, 1 from refs
+  where root_fk=?3 and type='defn' and pre1=?1 and name like ?2 escape '\x1B;'
+    and file_fk is not ?4
+  union all
+  select name, 0 from refs
+  where file_fk=?4 and pre1=?1 and name like ?2 escape '\x1B;')
+ group by name
 ) candidates
 left outer join refs
-on candidates.name = refs.name and refs.root_fk=?3
+on candidates.name = refs.name and refs.root_fk is ?3 and refs.file_fk=?4
 group by candidates.name
 order by distance is null, distance asc, count desc, candidates.name asc"
                      pre1 pat root-fk file-fk line completion-below-cost)))]
               ;; Drop the identifier under the cursor when it's the
-              ;; only reference. It need not be the first row, since a
+              ;; only reference in this file and nothing else makes
+              ;; it known. It need not be the first row, since a
               ;; candidate on the same line may rank ahead of it.
               [rows
                (remp
                 (lambda (row)
                   (match row
-                    [#(,_ 1 ,@prefix) #t]
+                    [#(,_ 1 ,@prefix 0) #t]
                     [,_ #f]))
                 rows)]
               [nrows (length rows)]
@@ -245,7 +259,7 @@ order by distance is null, distance asc, count desc, candidates.name asc"
                (mapn
                 (lambda (i row)
                   (match row
-                    [#(,distance ,count ,name)
+                    [#(,distance ,count ,name ,known)
                      (let ([sortText (format "~6d" i)]
                            [score (- 1.0 (/ i nrows))])
                        (json:make-object
@@ -551,18 +565,21 @@ order by distance is null, distance asc, count desc, candidates.name asc"
       (create-index 'events_timestamp "events(timestamp)")
 
       ;; Each index matches particular lookups. A database on disk may
-      ;; still have the single-column indexes these replace.
+      ;; still have the indexes these replace.
       (for-each
        (lambda (name) (execute (format "drop index if exists ~a" name)))
-       '(refs_name refs_uid refs_root refs_file refs_pre1 refs_type))
-      ;; A name under the cursor, and a file's refs.
+       '(refs_name refs_uid refs_root refs_file refs_pre1 refs_type
+          refs_root_pre1_name))
+      ;; A name under the cursor, a file's refs, and completion
+      ;; candidates in a file.
       (create-index 'refs_file_line "refs(file_fk, line)")
       ;; Definitions and references of a name, in a root or anywhere.
       (create-index 'refs_uid_root "refs(uid, root_fk)")
       (create-index 'refs_defn "refs(uid, root_fk) where type='defn'")
-      ;; Completion candidates, and a root's refs.
-      (create-index 'refs_root_pre1_name "refs(root_fk, pre1, name)")
-      ;; Completion's counts and distances, from the index alone.
+      ;; Completion candidates defined in other files.
+      (create-index 'refs_defn_name "refs(root_fk, pre1, name) where type='defn'")
+      ;; Completion's counts and distances in a file, from the index
+      ;; alone, and a root's refs.
       (create-index 'refs_root_name "refs(root_fk, name, file_fk, line)")
       (create-index 'roots_path "roots(path)"))
     (define (upgrade-db)

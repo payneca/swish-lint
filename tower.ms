@@ -205,12 +205,14 @@ where F.filename=?" filename)
          (ws:close a)
          (ws:close b))))))
 
-(isolate-mat completion-counts ()
-  ;; Completions rank by references in the client's root, so a name
-  ;; used often in another root doesn't come first. The completions
-  ;; are in a file with no references, so distance doesn't decide.
+(isolate-mat completion-scope ()
+  ;; A file is offered the names it refers to and the names defined in
+  ;; other files of its root, but not names only used elsewhere or
+  ;; defined in another root. Names with no reference in this file are
+  ;; far away, so they sort by name, however often they're used.
   (let ([port (start-tower)]
         [a.ss "/tmp/root-a/a.ss"]
+        [lib.ss "/tmp/root-a/lib.ss"]
         [b.ss "/tmp/root-b/b.ss"])
     (on-exit (stop-tower)
       (let ([a (connect port)]
@@ -218,18 +220,39 @@ where F.filename=?" filename)
         (match-let*
          (["ok" (reset-directory a "/tmp/root-a")]
           ["ok" (reset-directory b "/tmp/root-b")]
-          ["ok" (update a a.ss
-                  (list
-                   (ref "sh-few" 0 1 #f)
-                   (ref "sh-few" 1 1 #f)
-                   (ref "sh-many" 2 1 #f)))]
-          ["ok" (update b b.ss
-                  (map (lambda (line) (ref "sh-many" line 1 #f))
-                    (iota 5)))]
-          [("sh-few" "sh-many")
-           (completions a "/tmp/root-a/new.ss" 0 0 "sh-")])
+          ["ok" (update a a.ss (list (ref "sc-here" 0 1 #f)))]
+          ["ok" (update a lib.ss
+                  (append
+                   (list
+                    (ref "sc-zed" 0 8 #t)
+                    (ref "sc-alpha" 1 8 #t)
+                    (ref "sc-used" 2 1 #f))
+                   (map (lambda (line) (ref "sc-zed" line 1 #f))
+                     '(3 4 5 6 7))))]
+          ["ok" (update b b.ss (list (ref "sc-other-root" 0 8 #t)))]
+          [("sc-here" "sc-alpha" "sc-zed")
+           (completions a a.ss 5 0 "sc-")])
          (ws:close a)
          (ws:close b))))))
+
+(isolate-mat completion-typed-name ()
+  ;; The name being typed is its own reference, so it's dropped when
+  ;; it's the only one in the file, unless it's defined in another file.
+  (let ([port (start-tower)]
+        [a.ss "/tmp/root-a/a.ss"]
+        [lib.ss "/tmp/root-a/lib.ss"])
+    (on-exit (stop-tower)
+      (let ([ws (connect port)])
+        (match-let*
+         (["ok" (reset-directory ws "/tmp/root-a")]
+          ["ok" (update ws lib.ss (list (ref "ty-lib" 0 8 #t)))]
+          ["ok" (update ws a.ss (list (ref "ty-lib" 0 1 #f)))]
+          [("ty-lib") (completions ws a.ss 0 7 "ty-lib")]
+          ["ok" (update ws a.ss (list (ref "ty-new" 0 1 #f)))]
+          [() (completions ws a.ss 0 7 "ty-new")]
+          ["ok" (update ws a.ss (list (ref "ty-def" 0 8 #t)))]
+          [() (completions ws a.ss 0 14 "ty-def")])
+         (ws:close ws))))))
 
 (isolate-mat missing-root ()
   ;; A client that never sets a root still gets answers about its own
