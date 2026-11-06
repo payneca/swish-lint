@@ -625,7 +625,9 @@ order by distance is null, distance asc, count desc, candidates.name asc"
       [#(ok ,_)
        (db:expire-cache 'log-db)
        'ignore]
-      [,error error]))
+      [#(error ,reason)
+       (fprintf (console-error-port) "~a\n" (exit-reason->english reason))
+       `#(error ,reason)]))
 
   ;; Getting the keywords runs another Scheme process, so it starts after
   ;; the listener and runs in the background. Until it finishes,
