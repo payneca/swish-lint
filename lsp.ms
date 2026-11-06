@@ -377,6 +377,57 @@
     (on-exit (stop-lsp-server rpc)
       'ok)))
 
+(define (roots)
+  (map (lambda (row) (match row [#(,path) path]))
+    (transaction 'log-db (execute "select path from roots"))))
+
+;; A path as the LSP gets it from a URI, which uses / even on Windows.
+(define (as-uri-path path)
+  (uri->abs-path (abs-path->uri path)))
+
+;; Without a root folder, opens fn first. Returns the tower's roots
+;; and whether the project's enumeration began within ms.
+(define (open-first fn ms)
+  (let ([rpc (start-lsp-server #f)])
+    (define wait-for-progress (capture-progress))
+    (on-exit (stop-lsp-server rpc)
+      (did-open (abs-path->uri fn) "(define x 1)\n")
+      ;; Allow 5 s for the reset to reach the tower.
+      (let lp ([tries 0])
+        (unless (or (pair? (roots)) (= tries 500))
+          (receive (after 10 (lp (+ tries 1))))))
+      (list (roots)
+        (and (wait-for-progress "enumerate-directories" ms) #t)))))
+
+(isolate-mat root-from-repository ()
+  ;; Without a root folder, the first file opened decides the root. In
+  ;; a git repository, the root is the repository's top, and the
+  ;; project is indexed.
+  (with-tmp-dir
+   (let* ([repo (path-combine (tmp-dir) "repo")]
+          [root (as-uri-path repo)])
+     (make-directory-path (path-combine repo ".git" "x"))
+     (match-let*
+      ;; Enumerating runs a script, which can be slow to start.
+      ([((,@root) #t) (open-first (path-combine repo "src" "a.ss") 5000)])
+      'ok))))
+
+(isolate-mat root-from-directory ()
+  ;; Outside a git repository, the root is the file's directory, which
+  ;; could be any directory, so it isn't indexed.
+  (define (in-repository? dir)
+    (or (file-exists? (path-combine dir ".git"))
+        (let ([parent (path-parent dir)])
+          (and (< (string-length parent) (string-length dir))
+               (in-repository? parent)))))
+  (let ([dir (path-combine (path-parent (base-dir)) "swish-lint-no-repo")])
+    ;; The directory above the repository may itself be in one.
+    (unless (in-repository? (path-parent dir))
+      (let ([root (as-uri-path dir)])
+        (match-let*
+         ([((,@root) #f) (open-first (path-combine dir "b.ss") 1000)])
+         'ok)))))
+
 (isolate-mat json-rpc ()
   (define (request method params)
     (try

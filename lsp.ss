@@ -757,6 +757,17 @@
                         (lp (cons fn ls))
                         (lp ls)))])]))))])))
 
+  ;; Returns the directory at or above dir that has a .git directory or
+  ;; file, or #f.
+  (define (find-repository dir)
+    (let lp ([dir dir])
+      (cond
+       [(file-exists? (path-combine dir ".git")) dir]
+       [else
+        (let ([parent (path-parent dir)])
+          (and (< (string-length parent) (string-length dir))
+               (lp parent)))])))
+
   (define (find-files-default path)
     (filter-files path
       (lambda (dir)
@@ -793,6 +804,7 @@
     (define-state-tuple <lsp-server>
       root-uri
       root-dir
+      index-root?                      ; whether to enumerate root-dir
       req->pid
       pid->req
       uri->doc
@@ -808,6 +820,7 @@
       `#(ok ,(<lsp-server> make
                [root-uri #f]
                [root-dir #f]
+               [index-root? #t]
                [req->pid (ht:make equal-hash equal?
                            (lambda (x) (or (fixnum? x) (string? x))))]
                [pid->req (ht:make process-id eq? process?)]
@@ -922,7 +935,7 @@
     ;; cancels the old one.
     (define (index-project state)
       (cond
-       [($state root-dir) =>
+       [(and ($state index-root?) ($state root-dir)) =>
         (lambda (dir)
           (let ([old ($state indexer)])
             (when old (kill old 'cancelled)))
@@ -939,6 +952,26 @@
             (monitor pid)
             ($state copy [indexer pid])))]
        [else state]))
+
+    ;; Without a root folder, the first file opened decides the root:
+    ;; the top of its git repository, which is indexed, or else its own
+    ;; directory, which isn't, since that could be any directory.
+    (define (root-from-file uri state)
+      (match (try (uri->abs-path uri))
+        [`(catch ,_) state]             ; not a file
+        [,filename
+         (let* ([dir (path-parent filename)]
+                [repo (find-repository dir)]
+                [root-dir (or repo dir)]
+                [state ($state copy
+                         [root-uri (abs-path->uri root-dir)]
+                         [root-dir root-dir]
+                         [index-root? (and repo #t)])])
+           (tower-client:reset-directory root-dir)
+           (parameterize ([config-error
+                           (lambda (msg) (lsp:show-message 'warning msg))])
+             (config:load-project root-dir))
+           (index-project state))]))
 
     ;; An open document's check worker indexes its buffer, which wins
     ;; over the file on disk.
@@ -1081,7 +1114,9 @@
                 [root-uri (and (string? root-uri) root-uri)]
                 [root-dir (and root-uri (uri->abs-path root-uri))]
                 [client-cap (json:get params 'capabilities)])
-           (tower-client:reset-directory root-dir)
+           ;; Without a root, the first file opened decides it.
+           (when root-dir
+             (tower-client:reset-directory root-dir))
            `#(ok
               ,(json:make-object
                 [capabilities
@@ -1202,8 +1237,14 @@
             [($state root-dir) => config:load-project]))
          (index-project state)]
         ["textDocument/didOpen"
-         (let ([doc (json:get params 'textDocument)])
-           (updated (json:get doc 'uri) (json:get doc 'text)
+         (let* ([doc (json:get params 'textDocument)]
+                [uri (json:get doc 'uri)]
+                ;; Set the root before the file is checked, so the tower
+                ;; gets the reset before the file's references.
+                [state (if ($state root-dir)
+                           state
+                           (root-from-file uri state))])
+           (updated uri (json:get doc 'text)
              (json:ref doc 'version #f) #t state))]
         ["textDocument/didChange"
          (updated
