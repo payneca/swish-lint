@@ -404,13 +404,15 @@
      (lambda ()
        (catch (do-update-refs uri text annotated-code source-table)))))
 
-  (define (get-completions doc uri line char)
-    (let ([line (+ line 1)]       ; LSP is 0-based
-          #;[char (+ char 1)])    ; ... but we want the preceding char
+  (define (get-completions doc uri line0 char0)
+    ;; The prefix being typed ends with the character before the cursor,
+    ;; whose 1-based position is the cursor's 0-based position.
+    (let ([line1 (+ line0 1)]
+          [before-char1 char0])
       (cond
-       [(doc:value-near doc line char) =>
+       [(doc:value-near doc line1 before-char1) =>
         (lambda (prefix)
-          (tower-client:get-completions (uri->abs-path uri) line char prefix))]
+          (tower-client:get-completions (uri->abs-path uri) line1 prefix))]
        [else '()])))
 
   ;; The LSP range of a name the tower found, from its line, char and

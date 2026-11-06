@@ -340,15 +340,14 @@
   (define (tower-client:cast msg)
     (gen-server:cast 'tower-client `#(cast ,msg)))
 
-  (define (tower-client:get-completions filename line char prefix)
+  (define (tower-client:get-completions filename line1 prefix)
     (tower-client:call
      (json:make-object
       [method "get-completions"]
       [params
        (json:make-object
         [filename filename]
-        [line line]
-        [char char]
+        [line line1]
         [prefix prefix])])))
 
   (define (tower-client:get-definitions filename line char)
