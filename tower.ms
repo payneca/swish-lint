@@ -138,14 +138,13 @@ where F.filename=?" filename)
      (list (json:get x 'filename) (json:get x 'line) (json:get x 'char)))
    ls))
 
-(define (completions ws filename line char prefix)
+(define (completions ws filename line1 prefix)
   (map
    (lambda (x) (json:get x 'label))
    (tower-call ws "get-completions"
      (json:make-object
       [filename filename]
-      [line line]
-      [char char]
+      [line line1]
       [prefix prefix]))))
 
 ;; Returns the status and the content as a string.
@@ -218,8 +217,8 @@ where F.filename=?" filename)
            (locations (tower-call b "get-references" (position b.ss 3 2)))]
           [((,@a.ss 0 8) (,@a.ss 2 1))
            (locations (tower-call a "get-references" (position a.ss 0 9)))]
-          [("only-a") (completions a a.ss 5 0 "only-")]
-          [() (completions b b.ss 5 0 "only-")])
+          [("only-a") (completions a a.ss 5 "only-")]
+          [() (completions b b.ss 5 "only-")])
          (ws:close a)
          (ws:close b))))))
 
@@ -249,7 +248,7 @@ where F.filename=?" filename)
                      '(3 4 5 6 7))))]
           ["ok" (update b b.ss (list (ref "sc-other-root" 0 8 #t)))]
           [("sc-here" "sc-alpha" "sc-zed")
-           (completions a a.ss 5 0 "sc-")])
+           (completions a a.ss 5 "sc-")])
          (ws:close a)
          (ws:close b))))))
 
@@ -265,11 +264,11 @@ where F.filename=?" filename)
          (["ok" (reset-directory ws "/tmp/root-a")]
           ["ok" (update ws lib.ss (list (ref "ty-lib" 0 8 #t)))]
           ["ok" (update ws a.ss (list (ref "ty-lib" 0 1 #f)))]
-          [("ty-lib") (completions ws a.ss 0 7 "ty-lib")]
+          [("ty-lib") (completions ws a.ss 0 "ty-lib")]
           ["ok" (update ws a.ss (list (ref "ty-new" 0 1 #f)))]
-          [() (completions ws a.ss 0 7 "ty-new")]
+          [() (completions ws a.ss 0 "ty-new")]
           ["ok" (update ws a.ss (list (ref "ty-def" 0 8 #t)))]
-          [() (completions ws a.ss 0 14 "ty-def")])
+          [() (completions ws a.ss 0 "ty-def")])
          (ws:close ws))))))
 
 ;; The tower skips refs whose hash it already has for the file in the
@@ -326,7 +325,7 @@ where F.filename=?" filename)
            (locations (tower-call ws "get-definitions" (position fn 2 1)))]
           [(,_ ,_)
            (tower-call ws "get-local-references" (position fn 2 1))]
-          [,ls (guard (list? ls)) (completions ws fn 4 0 "lone")])
+          [,ls (guard (list? ls)) (completions ws fn 4 "lone")])
          (ws:close ws))))))
 
 (isolate-mat failed-message ()
