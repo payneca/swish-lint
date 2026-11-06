@@ -40,12 +40,16 @@
   (define (expected-dir) (path-combine (support-dir) "mat-expected"))
   (define (actual-dir) (path-combine (support-dir) "mat-actual"))
 
+  ;; Runs the body with tmp-dir set to <base-dir>/tmp and returns its
+  ;; value. tmp is deleted only when the body returns, so a failing mat
+  ;; leaves its files in place for diagnosis.
   (define-syntax with-tmp-dir
     (syntax-rules ()
       [(_ e0 e1 ...)
        (parameterize ([tmp-dir (path-combine (base-dir) "tmp")])
-         e0 e1 ...
-         (remove-directory (tmp-dir)))]))
+         (let ([result (let () e0 e1 ...)])
+           (remove-directory (tmp-dir))
+           result))]))
 
   (define-environment-parameters XDG_CONFIG_HOME)
 
