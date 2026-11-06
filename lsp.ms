@@ -2035,6 +2035,30 @@
          (assert (equal? (json:get edit 'newText) (make-string 10 #\space))))
         (did-close uri)))))
 
+(isolate-mat formatting-crlf ()
+  ;; In a document with CRLF line endings, LSP doesn't count a line's
+  ;; "\r" as part of the line, so no edit covers or inserts it.
+  (define (extract-edits ls)
+    (map
+     (lambda (obj)
+       (list (json:get obj 'newText)
+         (extract-range (json:get obj 'range))))
+     ls))
+  (let ([rpc (start-lsp-server #f)])
+    (on-exit (stop-lsp-server rpc)
+      (let ([uri1 "file:///tmp/crlf1.ss"]
+            [uri2 "file:///tmp/crlf2.ss"])
+        (did-open uri1 "(define (f)\r\n   \r\n x)\r\n")
+        (did-open uri2 "(define (f)\r\n\r\n  1)\r\n")
+        (match-let*
+         ([(("" (from 1 0 to 1 3))
+            ("  x)" (from 2 0 to 2 4)))
+           (extract-edits (format-document uri1))]
+          [(("  " (from 1 0 to 1 2)))
+           (extract-edits (format-on-type uri2 "\n" 1 0))])
+         (did-close uri1)
+         (did-close uri2))))))
+
 (isolate-mat format-on-type-crlf ()
   ;; In a document with CRLF line endings, LSP counts a line's "\r" as
   ;; part of its ending, so an edit neither covers nor inserts it.

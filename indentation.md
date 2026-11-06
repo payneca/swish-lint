@@ -21,6 +21,11 @@ follows this workflow:
 
 * indent comments
 
+The indenter keeps a file's line endings. A file with CRLF line
+endings stays CRLF, even on a line it empties of whitespace. The
+whitespace checker is what reports CRLF line endings, as "undesirable
+DOS line ending".
+
 ## Not Like Emacs
 
 Default Emacs configurations use a `fill-column` of 70. Doom Emacs

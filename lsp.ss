@@ -457,6 +457,14 @@
                 end-line0)))
         (values 0 (fx- (most-positive-fixnum) 1))))
 
+  ;; LSP doesn't count the "\r" of a CRLF line ending as part of the
+  ;; line, so an edit must neither cover nor insert it.
+  (define (without-return line)
+    (let ([len (string-length line)])
+      (if (and (fx> len 0) (char=? (string-ref line (fx- len 1)) #\return))
+          (substring line 0 (fx- len 1))
+          line)))
+
   (define (indent-range doc range options)
     (let-values ([(start-line0 end-line0) (range->lines0 range)])
       (trace-time 'indent
@@ -465,7 +473,9 @@
             (reverse
              (fold-indent (doc:text doc) (+ start-line0 1) (+ end-line0 1) '()
                (lambda (line1 old new acc)
-                 (let ([line0 (- line1 1)])
+                 (let ([line0 (- line1 1)]
+                       [old (without-return old)]
+                       [new (without-return new)])
                    (if (and (<= start-line0 line0 end-line0)
                             (not (string=? old new)))
                        (cons

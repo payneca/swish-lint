@@ -675,11 +675,19 @@
          [(eqv? (string-ref text i) #\newline) (fx- len (fx+ i 1))]
          [else (lp (fx- i 1))]))))
 
+  (define (put-whitespace op raw)
+    (put-token op
+      (make-token 'ws (token-type-indexer 'ws) raw raw #f #f #f empty-props)))
+
   (define (emit-whitespace op n)
     (when (> n 0)
-      (let ([raw (make-string n #\space)])
-        (put-token op
-          (make-token 'ws (token-type-indexer 'ws) raw raw #f #f #f empty-props)))))
+      (put-whitespace op (make-string n #\space))))
+
+  (define (ends-with-return? t)
+    (let* ([raw (token-raw t)]
+           [len (string-length raw)])
+      (and (fx> len 0)
+           (char=? (string-ref raw (fx- len 1)) #\return))))
 
   (define (emit-tokens op ls)
     (match ls
@@ -753,6 +761,11 @@
              (put-token op t)
              (start-new-line rlevels)]
             [(eq? type 'ws)
+             ;; A whitespace-only line loses its whitespace but keeps
+             ;; a CRLF line ending.
+             (when (and (has-prop? t 'trailing-whitespace)
+                        (ends-with-return? t))
+               (put-whitespace op "\r"))
              (s0
               (if (or (has-prop? t 'with-code-whitespace)
                       (and at-file-start?
