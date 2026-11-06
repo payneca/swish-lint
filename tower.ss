@@ -219,7 +219,6 @@ substr(F.filename,-3)='.ss' desc, F.filename asc, D.line asc"
       [get-completions
        (let* ([filename (json:get msg '(params filename))]
               [line (json:get msg '(params line))]
-              [char (json:get msg '(params char))]
               [prefix (json:get msg '(params prefix))]
               ;; when the identifier contains with a percent or
               ;; underscore, we need to escape it using an uncommon
