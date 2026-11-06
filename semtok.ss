@@ -207,28 +207,21 @@
        [else
         (values class modifiers state)])))
 
-  (define-tuple <semtok> line char length type modifiers)
+  (define-tuple <semtok> line0 char0 length type modifiers)
 
-  (define (cons*token t rest)
-    (match-define `(<semtok> ,line ,char ,length ,type ,modifiers) t)
-    (cons* line char length type modifiers rest))
-
+  ;; Each token's line and start are relative to the prior token's.
   (define (encode-tokens ls)
-    (let lp ([ls ls] [prior #f])
+    (let lp ([ls ls] [prior-line0 0] [prior-char0 0])
       (match ls
         [() '()]
         [(,t . ,rest)
-         (match prior
-           [#f (cons*token t (lp rest t))]
-           [`(<semtok> ,line ,char)
-            (let* ([delta-line (- (<semtok> line t) line)]
-                   [delta-start (if (zero? delta-line)
-                                    (- (<semtok> char t) char)
-                                    (<semtok> char t))]
-                   [new (<semtok> copy t
-                          [line delta-line]
-                          [char delta-start])])
-              (cons*token new (lp rest t)))])])))
+         (match-define `(<semtok> ,line0 ,char0 ,length ,type ,modifiers) t)
+         (let* ([delta-line (- line0 prior-line0)]
+                [delta-start (if (zero? delta-line)
+                                 (- char0 prior-char0)
+                                 char0)])
+           (cons* delta-line delta-start length type modifiers
+             (lp rest line0 char0)))])))
 
   ;; The length of raw's characters from start to end on one line. LSP
   ;; counts the "\r" of a CRLF line ending as part of the ending, so a
@@ -254,17 +247,17 @@
               [class
                (let ()
                  (match-define `(token ,raw ,bfp ,efp) t)
-                 (let-values ([(line1 char) (fp->line/char table bfp)]
-                              [(line2 _char) (fp->line/char table efp)])
+                 (let-values ([(line1 char1) (fp->line/char table bfp)]
+                              [(end-line1 end-char1) (fp->line/char table efp)])
                    (let ([len (token-length t)]
                          [type (semtok:type->index class)]
                          [modifiers (semtok:modifiers->flags modifiers)])
                      (cond
-                      [(= line1 line2)
+                      [(= line1 end-line1)
                        (outer rest state
                          (cons (<semtok> make
-                                 [line (- line1 1)] ; LSP is 0-based
-                                 [char (- char 1)]  ; LSP is 0-based
+                                 [line0 (- line1 1)]
+                                 [char0 (- char1 1)]
                                  [length (piece-length raw 0 len)]
                                  [type type]
                                  [modifiers modifiers])
@@ -272,24 +265,24 @@
                       [else
                        ;; VSCode does not like multi-line tokens.
                        (let inner ([start 0]
-                                   [line (- line1 1)] ; LSP is 0-based
-                                   [char (- char 1)]  ; LSP is 0-based
+                                   [line0 (- line1 1)]
+                                   [char0 (- char1 1)]
                                    [acc acc])
                          (match (pregexp-match-positions (re "[\\n]") raw start)
                            [#f
                             (outer rest state
                               (cons (<semtok> make
-                                      [line line]
-                                      [char char]
+                                      [line0 line0]
+                                      [char0 char0]
                                       [length (piece-length raw start len)]
                                       [type type]
                                       [modifiers modifiers])
                                 acc))]
                            [((,s . ,e))
-                            (inner e (+ line 1) 0
+                            (inner e (+ line0 1) 0
                               (cons (<semtok> make
-                                      [line line]
-                                      [char char]
+                                      [line0 line0]
+                                      [char0 char0]
                                       [length (piece-length raw start s)]
                                       [type type]
                                       [modifiers modifiers])
