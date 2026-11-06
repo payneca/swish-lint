@@ -721,6 +721,13 @@
         (lambda (line old new acc) (cons new acc))))])
    'ok))
 
+(indent-mat crlf-line-endings ()
+  ;; Indenting keeps CRLF line endings, even on a line that held only
+  ;; whitespace.
+  (check-indent
+   "\r\n(let ()\r\n\r\n  x)\r\n\r\n"
+   "\r\n(let ()\r\n   \r\n x)\r\n\r\n"))
+
 (indent-mat normal-keywords ()
   (for-each
    (lambda (kw)
@@ -1978,12 +1985,15 @@
    (let ([good (path-combine (tmp-dir) "good.ss")]
          [bad (path-combine (tmp-dir) "bad.ss")]
          [one (path-combine (tmp-dir) "one.ss")]
+         [crlf (path-combine (tmp-dir) "crlf.ss")]
          [bad-text "(define (f x)\n     (+ x 1))\n(let ()\n x)\n"])
      (write-text good "(define (f x)\n  (+ x 1))\n")
      (write-text bad bad-text)
      (write-text one "(let ()\n   x)\n")
+     (write-text crlf "(let ()\r\n\r\n  x)\r\n")
      (match-let*
       ([(0 ()) (check-indent good)]
+       [(0 ()) (check-indent crlf)]
        [(1 (,line1 ,line2)) (check-indent good bad one)])
       (assert (equal? line1 (format "~a: line 2: indentation differs (2 lines)" bad)))
       (assert (equal? line2 (format "~a: line 2: indentation differs (1 line)" one)))
