@@ -350,35 +350,35 @@
         [line line1]
         [prefix prefix])])))
 
-  (define (tower-client:get-definitions filename line char)
+  (define (tower-client:get-definitions filename line1 char1)
     (tower-client:call
      (json:make-object
       [method "get-definitions"]
       [params
        (json:make-object
         [filename filename]
-        [line line]
-        [char char])])))
+        [line line1]
+        [char char1])])))
 
-  (define (tower-client:get-references filename line char)
+  (define (tower-client:get-references filename line1 char1)
     (tower-client:call
      (json:make-object
       [method "get-references"]
       [params
        (json:make-object
         [filename filename]
-        [line line]
-        [char char])])))
+        [line line1]
+        [char char1])])))
 
-  (define (tower-client:get-local-references filename line char)
+  (define (tower-client:get-local-references filename line1 char1)
     (tower-client:call
      (json:make-object
       [method "get-local-references"]
       [params
        (json:make-object
         [filename filename]
-        [line line]
-        [char char])])))
+        [line line1]
+        [char char1])])))
 
   (define (tower-client:log msg)
     (tower-client:cast

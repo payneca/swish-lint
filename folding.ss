@@ -72,12 +72,12 @@
               (eq? (token-value t) 'import))])]))
 
   ;; Returns the ranges in any order. opens is a stack of the open
-  ;; parens' (line . kind). block is #f or the (line . depth) of the
+  ;; parens' (line0 . kind). block is #f or the (line0 . depth) of the
   ;; outermost open block comment. run is #f or the first line of a run
   ;; of comment lines. code? and comment? say what the current line has
   ;; seen so far.
   (define (scan tokens)
-    (let lp ([ts tokens] [line 0] [opens '()] [block #f] [run #f]
+    (let lp ([ts tokens] [line0 0] [opens '()] [block #f] [run #f]
              [code? #f] [comment? #f] [acc '()])
       (define (comment-run end acc)
         (if (and run (fx> end run))
@@ -86,42 +86,42 @@
       (match ts
         [()
          ;; The text may end without a newline after the run.
-         (comment-run (if (and comment? (not code?)) line (fx- line 1)) acc)]
+         (comment-run (if (and comment? (not code?)) line0 (fx- line0 1)) acc)]
         [(,t . ,rest)
          (let ([type (token-type t)])
            ;; Code ends a run of comment lines at the line before.
            (define (next opens block acc)
-             (lp rest (fx+ line (count-newlines (token-raw t))) opens block
-               #f #t comment? (comment-run (fx- line 1) acc)))
+             (lp rest (fx+ line0 (count-newlines (token-raw t))) opens block
+               #f #t comment? (comment-run (fx- line0 1) acc)))
            (cond
             [(eq? type 'eol)
              (if (and comment? (not code?))
-                 (lp rest (fx+ line 1) opens block (or run line) #f #f acc)
-                 (lp rest (fx+ line 1) opens block #f #f #f
-                   (comment-run (fx- line 1) acc)))]
+                 (lp rest (fx+ line0 1) opens block (or run line0) #f #f acc)
+                 (lp rest (fx+ line0 1) opens block #f #f #f
+                   (comment-run (fx- line0 1) acc)))]
             [(eq? type 'ws)
-             (lp rest line opens block run code? comment? acc)]
+             (lp rest line0 opens block run code? comment? acc)]
             [(eq? type 'line-comment)
-             (lp rest line opens block run code? #t acc)]
+             (lp rest line0 opens block run code? #t acc)]
             [(eq? type 'lblock-comment)
              (next opens
                (match block
-                 [#f (cons line 1)]
+                 [#f (cons line0 1)]
                  [(,start . ,depth) (cons start (fx+ depth 1))])
                acc)]
             [(eq? type 'rblock-comment)
              (match block
                [#f (next opens block acc)]
                [(,start . 1)
-                (next opens #f (cons (vector start line "comment") acc))]
+                (next opens #f (cons (vector start line0 "comment") acc))]
                [(,start . ,depth)
                 (next opens (cons start (fx- depth 1)) acc)])]
             [block (next opens block acc)]
             [(token-open? t)
              (next
-              (cons (cons line (and (eq? type 'lparen)
-                                    (import-next? rest)
-                                    "imports"))
+              (cons (cons line0 (and (eq? type 'lparen)
+                                     (import-next? rest)
+                                     "imports"))
                 opens)
               block acc)]
             [(token-close? t)
@@ -129,10 +129,10 @@
                ;; An extra close paren has nothing to fold.
                [() (next opens block acc)]
                [((,start . ,kind) . ,opens)
-                (next opens block (cons (vector start line kind) acc))])]
+                (next opens block (cons (vector start line0 kind) acc))])]
             [(has-prop? t 'string)
-             (let ([end (fx+ line (count-newlines (token-raw t)))])
-               (next opens block (cons (vector line end #f) acc)))]
+             (let ([end (fx+ line0 (count-newlines (token-raw t)))])
+               (next opens block (cons (vector line0 end #f) acc)))]
             [else (next opens block acc)]))])))
 
   (define (range-start r) (vector-ref r 0))

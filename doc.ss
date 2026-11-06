@@ -97,13 +97,13 @@
 
   ;; Clamp the character to the line's length, and a line past the end
   ;; to the end of the text.
-  (define (pos->line/fp text table line char)
+  (define (pos->line/fp text table line0 char0)
     (let ([last (fx- (vector-length table) 1)])
-      (if (> line last)
+      (if (> line0 last)
           (values last (string-length text))
-          (let ([start (vector-ref table line)])
-            (values line
-              (+ start (min char (- (line-end text table line) start))))))))
+          (let ([start (vector-ref table line0)])
+            (values line0
+              (+ start (min char0 (- (line-end text table line0) start))))))))
 
   ;; Lines sl through el are replaced by new, which spans sfp to efp in
   ;; the old text. Keep the starts of lines before the edit, add one

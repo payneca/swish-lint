@@ -1045,16 +1045,16 @@
                       (tokens->string (indent-tokens tokens at-file-start?)))])
       (do ([i 1 (+ i 1)]) ((= i first-line1))
         (get-line src-port))
-      (let lp ([line first-line1] [acc init])
+      (let lp ([line1 first-line1] [acc init])
         (if (or (eof-object? (peek-char src-port))
-                (> line end-line1))
+                (> line1 end-line1))
             acc
             (let ([src-line (get-line src-port)]
                   [dst-line (get-line dst-port)])
-              (lp (+ line 1)
-                (if (< line start-line1)
+              (lp (+ line1 1)
+                (if (< line1 start-line1)
                     acc
-                    (proc line src-line dst-line acc))))))))
+                    (proc line1 src-line dst-line acc))))))))
 
   ;; Returns the 1-based line where indenting can start and still
   ;; produce the right indentation for line1, or #f when line1 starts
@@ -1074,12 +1074,12 @@
   ;; start of the line. Otherwise the second value is #f.
   (define (find-indent-start text line1)
     (define end (string-length text))
-    (define line 1)
+    (define current-line1 1)
     (define (char-at i) (and (< i end) (string-ref text i)))
     (define (newline!)
       ;; returns #t when line1 starts inside a string or comment
-      (set! line (+ line 1))
-      (= line line1))
+      (set! current-line1 (+ current-line1 1))
+      (= current-line1 line1))
     (define (skip-to-newline i)
       (if (or (>= i end) (eqv? (string-ref text i) #\newline))
           i
@@ -1121,13 +1121,13 @@
           (define (result)
             (match opens
               [() (values line1 #f)]
-              [((,open-line . ,fp) . ,_) (values open-line fp)]))
+              [((,open-line1 . ,fp) . ,_) (values open-line1 fp)]))
           ;; j is the index after a string, comment, or |symbol| that
-          ;; began on line before. If it crossed a newline, the current
+          ;; began on before-line1. If it crossed a newline, the current
           ;; line begins inside it.
-          (define (after j before)
+          (define (after j before-line1)
             (if j
-                (lp j opens (or inside? (not (= line before))))
+                (lp j opens (or inside? (not (= current-line1 before-line1))))
                 (values #f #f)))
           (let ([c (char-at i)])
             (case c
@@ -1135,8 +1135,8 @@
               [(#\newline) (if (newline!) (result) (lp (+ i 1) opens #f))]
               [(#\;) (lp (skip-to-newline i) opens inside?)]
               [(#\" #\|)
-               (let ([before line])
-                 (after (skip-delimited (+ i 1) c) before))]
+               (let ([before-line1 current-line1])
+                 (after (skip-delimited (+ i 1) c) before-line1))]
               [(#\#)
                (case (char-at (+ i 1))
                  [(#\\)
@@ -1146,13 +1146,13 @@
                       (lp (+ i 2) opens inside?)
                       (lp (+ i 3) opens inside?))]
                  [(#\|)
-                  (let ([before line])
-                    (after (skip-block-comment (+ i 2) 1) before))]
+                  (let ([before-line1 current-line1])
+                    (after (skip-block-comment (+ i 2) 1) before-line1))]
                  ;; The datum after #; is still code.
                  [(#\;) (lp (+ i 2) opens inside?)]
                  [else (lp (+ i 1) opens inside?)])]
               [(#\( #\[)
-               (lp (+ i 1) (cons (cons line (and inside? i)) opens) inside?)]
+               (lp (+ i 1) (cons (cons current-line1 (and inside? i)) opens) inside?)]
               [(#\) #\])
                (lp (+ i 1) (if (null? opens) opens (cdr opens)) inside?)]
               [else (lp (+ i 1) opens inside?)])))))

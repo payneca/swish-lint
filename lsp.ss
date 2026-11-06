@@ -328,14 +328,14 @@
   (define (do-update-refs uri text annotated-code source-table)
     (let ([filename (uri->abs-path uri)]
           [refs (make-hashtable string-hash string=?)])
-      (define (key name line char)
-        (format "~a:~a:~a" name line char))
+      (define (key name line1 char1)
+        (format "~a:~a:~a" name line1 char1))
       (define (try-walk who walk code meta)
         (match
          (try
           (walk code
             (lambda (name uid bfp efp)
-              (let-values ([(line char) (fp->line/char source-table bfp)])
+              (let-values ([(line1 char1) (fp->line/char source-table bfp)])
                 (let ([new (json:make-object
                             ;; For the walkers that pre-computed the
                             ;; string based on bfp/efp, use that
@@ -345,14 +345,14 @@
                             [name (if (string? name)
                                       name
                                       (substring text bfp efp))]
-                            [line line]
-                            [char char]
+                            [line line1]
+                            [char char1]
                             [len (- efp bfp)]
                             [meta meta])])
                   ;; Without a uid, the tower uses the name.
                   (when uid
                     (json:set! new 'uid uid))
-                  (hashtable-update! refs (key name line char)
+                  (hashtable-update! refs (key name line1 char1)
                     (lambda (old)
                       (if old
                           (json:merge old new)
@@ -528,10 +528,10 @@
                             "a\n")])
                 (fold-indent text
                   1 (+ (- line1 start-line1) 1) '()
-                  (lambda (line old new acc)
-                    ;; LSP is 0-based
-                    (let ([line (+ line start-line1 -2)])
-                      (if (and (= line line0)
+                  (lambda (text-line1 old new acc)
+                    ;; text starts at start-line1, and LSP is 0-based
+                    (let ([edit-line0 (+ text-line1 start-line1 -2)])
+                      (if (and (= edit-line0 line0)
                                (not (string=? old new)))
                           ;; Subtract one from string lengths to eliminate
                           ;; the fake character.
@@ -541,8 +541,8 @@
                             (cons
                              (make-text-edit
                               (make-range
-                               (make-pos line 0)
-                               (make-pos line (max olen nlen)))
+                               (make-pos edit-line0 0)
+                               (make-pos edit-line0 (max olen nlen)))
                               new)
                              acc))
                           acc)))
