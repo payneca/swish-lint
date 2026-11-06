@@ -75,7 +75,7 @@
   (define (maybe-rows rows)
     (and (not (null? rows)) rows))
 
-  (define ($get-unique-id line char filename)
+  (define ($get-unique-id line1 char1 filename)
     (scalar
      (execute "
 select D.uid
@@ -84,7 +84,7 @@ inner join files F on F.file_pk=D.file_fk
 where D.line=?1
   and ?2 between D.char and D.char + D.len
   and F.filename=?3"
-       line char filename)))
+       line1 char1 filename)))
 
   ;; In the next two queries, +D.file_fk keeps SQLite from reading every
   ;; ref in the file. It finds the name's refs first, which are fewer.
@@ -110,7 +110,7 @@ where D.uid=?1
 order by substr(F.filename,-3)='.ss' desc, F.filename asc, D.line asc"
        uid root-fk)))
 
-  (define ($refs-in-file line char filename)
+  (define ($refs-in-file line1 char1 filename)
     (execute "
 select D.line,D.char,D.len from refs D
 inner join files F on F.file_pk=+D.file_fk
@@ -123,9 +123,9 @@ where D.uid in
      and F.filename=?3)
   and F.filename=?3
 order by D.line asc, D.char asc"
-      line char filename))
+      line1 char1 filename))
 
-  (define ($refs-in-workspace line char filename root-fk)
+  (define ($refs-in-workspace line1 char1 filename root-fk)
     (execute "
 select F.filename,D.line,D.char,D.len from refs D
 inner join files F on F.file_pk=D.file_fk
@@ -138,7 +138,7 @@ where D.uid in
      and F.filename=?3)
   and D.root_fk=?4
 order by substr(F.filename,-3)='.ss' desc, F.filename asc, D.line asc"
-      line char filename root-fk))
+      line1 char1 filename root-fk))
 
   (define ($defns-anywhere uid filename)
     (maybe-rows
@@ -218,7 +218,7 @@ substr(F.filename,-3)='.ss' desc, F.filename asc, D.line asc"
          (json:get msg '(params message)))]
       [get-completions
        (let* ([filename (json:get msg '(params filename))]
-              [line (json:get msg '(params line))]
+              [line1 (json:get msg '(params line))]
               [prefix (json:get msg '(params prefix))]
               ;; when the identifier contains with a percent or
               ;; underscore, we need to escape it using an uncommon
@@ -268,7 +268,7 @@ left outer join refs
 on candidates.name = refs.name and refs.root_fk is ?3 and refs.file_fk=?4
 group by candidates.name
 order by distance is null, distance asc, count desc, candidates.name asc"
-                     pre1 pat root-fk file-fk line completion-below-cost)))]
+                     pre1 pat root-fk file-fk line1 completion-below-cost)))]
               ;; Drop the identifier under the cursor when it's the
               ;; only reference in this file and nothing else makes
               ;; it known. It need not be the first row, since a
@@ -297,21 +297,21 @@ order by distance is null, distance asc, count desc, candidates.name asc"
          (rpc:respond ws msg completions))]
       [get-definitions
        (let* ([filename (json:get msg '(params filename))]
-              [line (json:get msg '(params line))]
-              [char (json:get msg '(params char))]
+              [line1 (json:get msg '(params line))]
+              [char1 (json:get msg '(params char))]
               [root-fk (root-key)]
               [defns
                (map
                 (lambda (row)
                   (match row
-                    [#(,fn ,line ,char ,len)
+                    [#(,fn ,line1 ,char1 ,len)
                      (json:make-object
                       [filename fn]
-                      [line line]
-                      [char char]
+                      [line line1]
+                      [char char1]
                       [len len])]))
                 (transaction 'log-db
-                  (let ([uid ($get-unique-id line char filename)])
+                  (let ([uid ($get-unique-id line1 char1 filename)])
                     (or ($defns-in-file uid filename)
                         ($defns-in-workspace uid root-fk)
                         ($defns-anywhere uid filename)
@@ -319,37 +319,37 @@ order by distance is null, distance asc, count desc, candidates.name asc"
          (rpc:respond ws msg defns))]
       [get-local-references
        (let* ([filename (json:get msg '(params filename))]
-              [line (json:get msg '(params line))]
-              [char (json:get msg '(params char))]
+              [line1 (json:get msg '(params line))]
+              [char1 (json:get msg '(params char))]
               [refs
                (map
                 (lambda (row)
                   (match row
-                    [#(,line ,char ,len)
+                    [#(,line1 ,char1 ,len)
                      (json:make-object
-                      [line line]
-                      [char char]
+                      [line line1]
+                      [char char1]
                       [len len])]))
                 (transaction 'log-db
-                  ($refs-in-file line char filename)))])
+                  ($refs-in-file line1 char1 filename)))])
          (rpc:respond ws msg refs))]
       [get-references
        (let* ([filename (json:get msg '(params filename))]
-              [line (json:get msg '(params line))]
-              [char (json:get msg '(params char))]
+              [line1 (json:get msg '(params line))]
+              [char1 (json:get msg '(params char))]
               [root-fk (root-key)]
               [refs
                (map
                 (lambda (row)
                   (match row
-                    [#(,fn ,line ,char ,len)
+                    [#(,fn ,line1 ,char1 ,len)
                      (json:make-object
                       [filename fn]
-                      [line line]
-                      [char char]
+                      [line line1]
+                      [char char1]
                       [len len])]))
                 (transaction 'log-db
-                  ($refs-in-workspace line char filename root-fk)))])
+                  ($refs-in-workspace line1 char1 filename root-fk)))])
          (rpc:respond ws msg refs))]
       [reset-directory
        (let* ([dir (json:get msg '(params directory))]
