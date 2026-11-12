@@ -1768,8 +1768,6 @@
      ls))
   (let ([rpc (start-lsp-server (get-real-path "."))])
     (on-exit (stop-lsp-server rpc)
-      (define wait-for-test-sync (capture-test-sync))
-
       (assert (eq? json-null (format-document "file:///tmp/does-not-exist.ss")))
       (assert (eq? json-null (format-range "file:///tmp/does-not-exist.ss" 0 0 1 0)))
       (let ([uri "file:///tmp/foo.ss"])
@@ -1779,7 +1777,6 @@
            "(let ([y 1]"
            "[z 1])"
            "(+ x y z)))"))
-        (wait-for-test-sync uri)
 
         ;; In this test we ask for reformatting, but we don't actually
         ;; apply the edits. The server's state of the code remains
