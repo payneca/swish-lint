@@ -713,45 +713,74 @@
 
 ;; Runs swish-lint --lsp, writes msgs to its stdin, closes stdin if
 ;; close?, and returns its exit status.
+(define (lsp-run msgs close?)
+  ;; Returns the exit status and what the server wrote to stderr.
+  (match (os:run
+          (path-combine (base-dir)
+            (if windows? "swish-lint.exe" "swish-lint"))
+          '("--lsp")
+          (os:run-options
+           [stdin
+            (lambda (op)
+              (for-each
+               (lambda (msg)
+                 (lsp:write-msg op msg)
+                 (flush-output-port op))
+               msgs)
+              ;; Keep stdin open until the server exits.
+              (unless close?
+                (receive)))]
+           [stdout #f]
+           [stderr 'string]
+           [timeout 30000]))
+    [`(<os:result> ,stderr ,exit-status)
+     (values exit-status stderr)]))
+
 (define (lsp-exit-status msgs close?)
-  (let-values ([(to-stdin from-stdout from-stderr os-pid)
-                (spawn-os-process
-                 (path-combine (base-dir)
-                   (if windows? "swish-lint.exe" "swish-lint"))
-                 '("--lsp")
-                 self)])
-    (on-exit (begin (close-port from-stdout) (close-port from-stderr))
-      (let ([op (binary->utf8 to-stdin)])
-        (for-each
-         (lambda (msg)
-           (lsp:write-msg op msg)
-           (flush-output-port op))
-         msgs)
-        (when close?
-          (close-port op))
-        (receive (after 30000
-                   (osi_kill* os-pid 15)
-                   (throw 'timeout))
-          [#(process-terminated ,@os-pid ,exit-status ,_)
-           exit-status])))))
+  (let-values ([(exit-status err) (lsp-run msgs close?)])
+    exit-status))
+
+(define lsp-initialize-msgs
+  (list
+   (json:make-object
+    [jsonrpc "2.0"]
+    [id 1]
+    [method "initialize"]
+    [params
+     (json:make-object
+      [rootUri json-null]
+      [capabilities (json:make-object)])])
+   (json:make-object
+    [jsonrpc "2.0"]
+    [method "initialized"]
+    [params (json:make-object)])))
+
+;; Runs body with a tower in this process, which the server uses
+;; instead of launching one.
+(define-syntax with-test-tower
+  (syntax-rules ()
+    [(_ body ...)
+     (begin
+       (log-file ":memory:")
+       (match-let*
+        ([#(ok ,_)
+          (supervisor:start&link 'main-sup 'one-for-all 0 1
+            (append
+             (make-swish-sup-spec (list swish-event-logger))
+             (tower:sup-spec 0)))])
+        (SWISH_LINT_PORT (number->string (http:get-port-number 'http)))
+        (on-exit (let ([pid (whereis 'main-sup)])
+                   (SWISH_LINT_PORT "")
+                   (unlink pid)
+                   (monitor pid)
+                   (kill pid 'shutdown)
+                   (receive [`(DOWN ,_ ,@pid ,_) 'ok]))
+          body ...)))]))
 
 (isolate-mat exit-status ()
   ;; The server exits with 0 after a shutdown request and 1 without one,
   ;; whether the client sends exit or closes stdin.
-  (define initialize
-    (list
-     (json:make-object
-      [jsonrpc "2.0"]
-      [id 1]
-      [method "initialize"]
-      [params
-       (json:make-object
-        [rootUri json-null]
-        [capabilities (json:make-object)])])
-     (json:make-object
-      [jsonrpc "2.0"]
-      [method "initialized"]
-      [params (json:make-object)])))
+  (define initialize lsp-initialize-msgs)
   (define shutdown
     (json:make-object
      [jsonrpc "2.0"]
@@ -761,27 +790,50 @@
     (json:make-object
      [jsonrpc "2.0"]
      [method "exit"]))
-  (log-file ":memory:")
-  (match-let*
-   ([#(ok ,_)
-     (supervisor:start&link 'main-sup 'one-for-all 0 1
-       (append
-        (make-swish-sup-spec (list swish-event-logger))
-        (tower:sup-spec 0)))])
-   ;; Use this tower, so the server doesn't launch one.
-   (SWISH_LINT_PORT (number->string (http:get-port-number 'http)))
-   (on-exit (let ([pid (whereis 'main-sup)])
-              (SWISH_LINT_PORT "")
-              (unlink pid)
-              (monitor pid)
-              (kill pid 'shutdown)
-              (receive [`(DOWN ,_ ,@pid ,_) 'ok]))
-     (match-let*
-      ([0 (lsp-exit-status `(,@initialize ,shutdown ,exit) #f)]
-       [1 (lsp-exit-status `(,@initialize ,exit) #f)]
-       [0 (lsp-exit-status `(,@initialize ,shutdown) #t)]
-       [1 (lsp-exit-status initialize #t)])
-      'ok))))
+  (with-test-tower
+   (match-let*
+    ([0 (lsp-exit-status `(,@initialize ,shutdown ,exit) #f)]
+     [1 (lsp-exit-status `(,@initialize ,exit) #f)]
+     [0 (lsp-exit-status `(,@initialize ,shutdown) #t)]
+     [1 (lsp-exit-status initialize #t)])
+    'ok)))
+
+(isolate-mat crash-report ()
+  ;; A handler that raises a condition stops the server, and stderr
+  ;; names the condition, not just "exception". A negative line breaks
+  ;; the protocol, so no correct client sends one.
+  (define uri "file:///tmp/crash-report.ss")
+  (define open
+    (json:make-object
+     [jsonrpc "2.0"]
+     [method "textDocument/didOpen"]
+     [params
+      (json:make-object
+       [textDocument
+        (json:make-object [uri uri] [text "(foo)\n"] [version 1])])]))
+  (define (pos line0 char0)
+    (json:make-object [line line0] [character char0]))
+  (define bad-change
+    (json:make-object
+     [jsonrpc "2.0"]
+     [method "textDocument/didChange"]
+     [params
+      (json:make-object
+       [textDocument (json:make-object [uri uri] [version 2])]
+       [contentChanges
+        (list
+         (json:make-object
+          [range (json:make-object [start (pos -1 0)] [end (pos 0 0)])]
+          [text "x"]))])]))
+  (with-test-tower
+   (let-values ([(exit-status err)
+                 (lsp-run `(,@lsp-initialize-msgs ,open ,bad-change) #f)])
+     (assert (not (eqv? exit-status 0)))
+     (assert
+      (exists
+       (lambda (line) (starts-with? line "swish-lint: Exception in vector-ref"))
+       (split err #\newline)))
+     (assert (not (member "swish-lint: exception" (split err #\newline)))))))
 
 (isolate-mat smoke ()
   (let ([rpc (start-lsp-server (get-real-path "."))])
