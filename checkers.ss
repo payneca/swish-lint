@@ -31,7 +31,7 @@
   (import
    (chezscheme)
    (config-params)
-   (os-process)
+   (os)
    (read)
    (swish imports)
    (tower-client)
@@ -157,67 +157,69 @@
 
   (define (make-external-checker ls)
     (lambda (uri skip-delay? annotated-code code report)
-      (define me self)
-      (define (process-input ip pid)
-        (let ([c (peek-char ip)])
-          (unless (eof-object? c)
+      ;; Returns what the program reported, in order: a JSON object for
+      ;; each diagnostic, and a string for each other nonblank line.
+      (define (read-output ip)
+        (let lp ([acc '()])
+          (let ([c (peek-char ip)])
             (cond
+             [(eof-object? c) (reverse acc)]
              [(char-whitespace? c)
               (get-char ip)
-              (process-input ip pid)]
+              (lp acc)]
              [(char=? c #\{)
-              (send me `#(process-json ,(json:read ip)))]
+              (lp (cons (json:read ip) acc))]
              [else
               (let ([inp (trim-whitespace (get-line ip))])
-                (unless (string=? inp "")
-                  (send me `#(process-error ,inp))))])
-            (process-input ip pid))))
-      (define (process-stderr ip pid)
-        (let ([line (get-line ip)])
-          (unless (eof-object? line)
-            (display line (trace-output-port))
-            (newline (trace-output-port))
-            (process-stderr ip pid))))
+                (lp (if (string=? inp "") acc (cons inp acc))))]))))
+      (define (trace-stderr ip)
+        (let lp ()
+          (let ([line (get-line ip)])
+            (unless (eof-object? line)
+              (display line (trace-output-port))
+              (newline (trace-output-port))
+              (lp)))))
+      ;; Reports what read-output returned, and returns how many
+      ;; diagnostics that was.
+      (define (report-all items)
+        (let lp ([items items] [lookup-table #f] [reported 0])
+          (match items
+            [() reported]
+            [(,str . ,rest)
+             (guard (string? str))
+             (let ([lookup-table (or lookup-table (make-code-lookup-table code))])
+               (let-values ([(line msg) (reason->line/msg str lookup-table)])
+                 (report line 'error "~a" msg)
+                 (lp rest lookup-table (+ reported 1))))]
+            [(,obj . ,rest)
+             (let* ([msg (json:ref obj 'message #f)]
+                    [type (match (json:ref obj 'type #f)
+                            ["info" 'info]
+                            ["hint" 'hint]
+                            ["warning" 'warning]
+                            [,_ 'error])]
+                    [line (json:ref obj 'line #f)]
+                    [line (and line (fixnum? line) (fxpositive? line) line)]
+                    [col (json:ref obj 'column #f)]
+                    [col (and col (fixnum? col) (fxpositive? col) col)])
+               (cond
+                [msg
+                 (report `#(near ,code ,line ,col) type "~a" msg)
+                 (lp rest lookup-table (+ reported 1))]
+                [else
+                 (lp rest lookup-table reported)]))])))
       (define (run-command cmd)
         (trace-time `(run-external-checker ,@cmd)
-          (match (os-process:start&link (car cmd) (cdr cmd) 'utf8
-                   process-input #f process-stderr)
-            [#(error ,reason)
-             (throw reason)]
-            [#(ok ,pid)
-             (let ([m (monitor pid)])
-               (let lp ([lookup-table #f])
-                 (receive (after 5000
-                            (kill pid 'shutdown)
-                            (receive (after 5000
-                                       (kill pid 'kill)
-                                       (receive
-                                        [`(DOWN ,@m ,_ ,_ ,err)
-                                         (throw err)]))
-                              [`(DOWN ,@m ,_ ,_ ,err)
-                               (throw err)]))
-                   [#(process-error ,str)
-                    (let ([lookup-table (or lookup-table (make-code-lookup-table code))])
-                      (let-values ([(line msg) (reason->line/msg str lookup-table)])
-                        (report line 'error "~a" msg)
-                        (lp lookup-table)))]
-                   [#(process-json ,obj)
-                    (let* ([msg (json:ref obj 'message #f)]
-                           [type (match (json:ref obj 'type #f)
-                                   ["info" 'info]
-                                   ["hint" 'hint]
-                                   ["warning" 'warning]
-                                   [,_ 'error])]
-                           [line (json:ref obj 'line #f)]
-                           [line (and line (fixnum? line) (fxpositive? line) line)]
-                           [col (json:ref obj 'column #f)]
-                           [col (and col (fixnum? col) (fxpositive? col) col)])
-                      (when msg
-                        (report `#(near ,code ,line ,col) type "~a" msg))
-                      (lp lookup-table))]
-                   [`(DOWN ,@m ,_ ,reason)
-                    (unless (eq? reason 'normal)
-                      (trace-expr `(external-checker ,(exit-reason->english reason))))])))])))
+          (match-let*
+           ([`(<os:result> ,stdout ,term-signal)
+             (os:run (car cmd) (cdr cmd)
+               (os:run-options
+                [stdout read-output]
+                [stderr trace-stderr]
+                [idle-timeout 5000]))])
+           (report-all stdout)
+           (unless (eqv? term-signal 0)
+             (trace-expr `(external-checker #(signal ,term-signal)))))))
       (when skip-delay?                 ; recently saved
         (let* ([filename
                 (if (starts-with? uri "file:")

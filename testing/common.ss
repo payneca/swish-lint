@@ -25,6 +25,7 @@
    actual-dir
    disarm-user-config
    expected-dir
+   remove-file/retry
    script-command
    support-dir
    with-tmp-dir
@@ -63,6 +64,16 @@
         (fprintf op "#!/usr/bin/env swish\n")
         (for-each (lambda (x) (write x op) (newline op)) exprs)))
     (set-file-mode fn #o777))
+
+  ;; On Windows, a program that was killed can hold its script open
+  ;; for a moment.
+  (define (remove-file/retry fn)
+    (let lp ([tries 0])
+      (if (= tries 100)
+          (remove-file fn)
+          (match (try (remove-file fn))
+            [`(catch ,_) (receive (after 10 (lp (+ tries 1))))]
+            [,_ 'ok]))))
 
   ;; Windows can't run a script directly, so run it with swish.
   (define (script-command fn . args)
