@@ -17,6 +17,16 @@
   (lambda (x)
     body ...))
 
+(M define (proc x)
+  body ...)
+
+(M trace-define (proc x)
+  body ...)
+
+(M define x 12)           ; A syntactic monad only defines procedures.
+
+(for-each define-handler! handlers)
+
 (alias a other-thing)
 (alias (no-highlight) due-to-invalid-pattern)
 

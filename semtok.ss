@@ -134,11 +134,14 @@
 
   (define (semtok:classify-full t state)
     ;; state: #f | lparen | regexp | define | define+ | let | define-syntax | define-syntax+
+    ;;        | prefix | monad-define
     ;;
     ;; patterns:
     ;; (re <string> | (pregexp* <string> => regexp
     ;; (define (<symbol> => function
     ;; (define <symbol> => variable
+    ;; (<symbol> define (<symbol> => function, for a syntactic monad
+    ;; (<symbol> trace-define (<symbol> => function, for a syntactic monad
     ;; (define-syntax (<symbol> => macro
     ;; (define-syntax <symbol> => macro
     ;; (let <symbol> => function
@@ -179,8 +182,12 @@
                       (enum-set-union mods (semtok:modifiers side-effect))
                       mods)])
             (if (enum-set=? mods (semtok:modifiers))
-                (values #f #f #f)
+                (values #f #f 'prefix)
                 (values 'function mods #f)))]))]
+     [(and (eq? type 'atomic)
+           (eq? state 'prefix)
+           (memq (token-value t) '(define trace-define)))
+      (values 'keyword #f 'monad-define)]
      [(eq? type 'atomic)
       (values
        (match state
@@ -195,6 +202,8 @@
       (match state
         [define (values #f #f 'define+)]
         [define-syntax (values #f #f 'define-syntax+)]
+        ;; A syntactic monad only defines procedures.
+        [monad-define (values #f #f 'define+)]
         [,_ (values #f #f 'lparen)])]
      [else
       (values #f #f #f)]))
