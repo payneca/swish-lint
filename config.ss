@@ -90,6 +90,14 @@
      [else
       (fprintf (config-output-port) "~:(~a~) configuration not found: ~a\n" who path)]))
 
+  (define (keyword-name? s)
+    (let ([n (string-length s)])
+      (and (fx> n 0)
+           (let lp ([i 0])
+             (or (fx= i n)
+                 (and (not (char-whitespace? (string-ref s i)))
+                      (lp (fx+ i 1))))))))
+
   (define (config:load-project path)
     (let ([fn (path-combine path ".swish" "swish-lint.ss")])
       (load-config 'project fn
@@ -98,6 +106,10 @@
             [(definition-keywords . ,ls)
              (unless (for-all string? ls)
                (throw "definition-keywords must all be strings"))
+             ;; An empty keyword would make names like -> definition
+             ;; keywords, and one with whitespace can't match a name.
+             (unless (for-all keyword-name? ls)
+               (throw "definition-keywords must not be empty or contain whitespace"))
              (config:definition-keywords ls)]
             [,_
              (config-problem "project configuration ~a: ignoring ~s" path expr)])))))

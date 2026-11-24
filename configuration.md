@@ -94,3 +94,5 @@ For example, in an object-oriented system, macros of the form `(class id body ..
 ``` scheme
 (definition-keywords "class" "interface")
 ```
+
+Each `kwd` must be a non-empty string without whitespace.

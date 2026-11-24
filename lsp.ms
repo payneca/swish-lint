@@ -591,7 +591,13 @@
           [rpc (start-uninitialized-lsp-server)]
           [wait-for-progress (capture-progress)])
      (on-exit (stop-lsp-server rpc)
-       (write-text fn "(definition-keywords 12)\n(no-such-setting)\n")
+       (write-text fn
+         (ct:join #\newline
+           "(definition-keywords 12)"
+           "(definition-keywords \"class\" \"\")"
+           "(definition-keywords \"meta define\")"
+           "(no-such-setting)"
+           ""))
        (rpc-client:set-event-handler 'rpc 'show-message
          (lambda (event)
            (and (equal? (json:ref event 'method #f) "window/showMessage")
@@ -624,6 +630,8 @@
                (assert (equal? (json:get params 'message)
                          (string-append prefix expected)))]))
           '("definition-keywords must all be strings"
+            "definition-keywords must not be empty or contain whitespace"
+            "definition-keywords must not be empty or contain whitespace"
             "ignoring (no-such-setting)")))
        ;; Let indexing finish before the directory is deleted.
        (wait-for-progress "enumerate-directories")))))
