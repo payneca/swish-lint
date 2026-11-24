@@ -168,9 +168,12 @@
       (join (cons "define" (map pregexp-quote (config:definition-keywords)))
         #\|)))
 
+  ;; meta may precede any definition. Another name before define or
+  ;; trace-define is a syntactic monad's, as in (M define (f x) ...).
   (define (defn-exprs)
     (list
-     (format "(?:~a\\s+)?~a\\s+\\(?" identifier (definition-keyword-pattern))
+     (format "(?:meta\\s+)?~a\\s+\\(?" (definition-keyword-pattern))
+     (format "~a\\s+(?:trace-)?define\\s+\\(" identifier)
      "set(?:-who)?!\\s+"))
 
   (define (defn-regexp)
@@ -211,6 +214,11 @@
     (define def-keyword?
       (keyword-matcher
        (format "^(?:~a|set(?:-who)?!)$" (definition-keyword-pattern))))
+    ;; meta may precede any definition. Another symbol before define or
+    ;; trace-define is a syntactic monad's, as in (M define (f x) ...).
+    (define (prefixed-defun? prefix keyword)
+      (or (and (eq? prefix 'meta) (defun-keyword? keyword))
+          (and (symbol? prefix) (memq keyword '(define trace-define)) #t)))
     (define (guarded name name.anno outer.anno)
       (cond
        [(not (symbol? name)) (void)]
@@ -243,12 +251,13 @@
           [`(annotation [stripped (,meta ,keyword (,name . ,_) . ,_)]
               [expression
                (,_ ,_ `(annotation [expression (,name.anno . ,_)]) . ,_)])
-           (guard (and (symbol? meta) (defun-keyword? keyword)))
+           (guard (prefixed-defun? meta keyword))
            (guarded name name.anno x)]
           [`(annotation [stripped (,meta ,keyword ,name . ,_)]
               [expression (,_ ,_ ,name.anno . ,_)])
-           ;; Use defun here because set! is not valid with meta.
-           (guard (and (symbol? meta) (defun-keyword? keyword)))
+           ;; Use defun here because set! is not valid with meta. A
+           ;; syntactic monad only defines procedures.
+           (guard (and (eq? meta 'meta) (defun-keyword? keyword)))
            (guarded name name.anno x)]
           [,_ (void)]))))
 

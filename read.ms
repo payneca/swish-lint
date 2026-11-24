@@ -112,6 +112,33 @@
    ([(a) (annotated-defns "(set! a 1)\n(set! (b c) 2)")])
    'ok))
 
+(isolate-mat prefixed-definitions ()
+  ;; meta may precede any definition, and a syntactic monad's name may
+  ;; precede define or trace-define to define a procedure. A call that
+  ;; passes a procedure named like a definition keyword defines
+  ;; nothing.
+  (define (defns walk code)
+    (let ([names '()])
+      (walk code
+        (lambda (name uid bfp efp)
+          (set! names (cons (format "~a" name) names))))
+      (reverse names)))
+  (for-each
+   (lambda (text expected)
+     (assert (equal? expected (defns walk-defns (read-code text))))
+     (assert (equal? expected (defns walk-defns-re text))))
+   '("(meta define (f x) x)"
+     "(meta define f (lambda (x) x))"
+     "(meta define-syntax m (syntax-rules ()))"
+     "(R define (rd ip) ip)"
+     "(R trace-define (rd ip) ip)"
+     "(R define x 1)"
+     "(R define-x (f y) y)"
+     "(for-each define-handler! handlers)"
+     "(map define-x (list 1 2))"
+     "(apply define-thing args)")
+   '(("f") ("f") ("m") ("rd") ("rd") () () () () ())))
+
 (isolate-mat walk-refs ()
   (define (extract-name str)
     (let ([result #f]
