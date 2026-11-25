@@ -529,14 +529,16 @@
       (lambda (type)
         (not (eq? type 'ws)))))
 
-  (define (block-tokens tp)
-    (let lp ([depth 1] [acc '()])
+  ;; block-tokens and expr-tokens add the tokens they read onto acc,
+  ;; most recent first, and return (return acc).
+  (define (block-tokens tp acc return)
+    (let lp ([depth 1] [acc acc])
       (cond
-       [(= depth 0) (reverse acc)]
+       [(= depth 0) (return acc)]
        [else
         (let ([t (get-token tp)])
           (token-cond t type
-            [eof (reverse acc)]
+            [eof (return acc)]
             [(eq? type 'lblock-comment)
              (lp (+ depth 1) (cons t acc))]
             [(eq? type 'rblock-comment)
@@ -544,14 +546,14 @@
             [else
              (lp depth (cons t acc))]))])))
 
-  (define (expr-tokens tp)
-    (let lp ([armed? #f] [depth 0] [acc '()])
+  (define (expr-tokens tp acc return)
+    (let lp ([armed? #f] [depth 0] [acc acc])
       (cond
-       [(and armed? (= depth 0)) (reverse acc)]
+       [(and armed? (= depth 0)) (return acc)]
        [else
         (let ([t (get-token tp)])
           (token-cond t type
-            [eof (reverse acc)]
+            [eof (return acc)]
             [(eq? type 'line-comment)
              (let ([comment (line-tokens tp)])
                (lp armed? depth
@@ -559,15 +561,11 @@
             [(eq? type 'lblock-comment)
              ;; As the reader does, skip a block comment; it isn't the
              ;; datum.
-             (let ([comment (block-tokens tp)])
-               (lp armed? depth
-                 (fold-right cons (cons t acc) (reverse comment))))]
+             (lp armed? depth (block-tokens tp (cons t acc) values))]
             [(and (eq? type 'quote) (eq? (token-value t) 'datum-comment))
              ;; A nested #; and the datum it comments out aren't the
              ;; datum either.
-             (let ([skipped (expr-tokens tp)])
-               (lp armed? depth
-                 (fold-right cons (cons t acc) (reverse skipped))))]
+             (lp armed? depth (expr-tokens tp (cons t acc) values))]
             [(token-open? t)
              (lp #t (+ depth 1) (cons t acc))]
             [(token-close? t)
@@ -587,13 +585,13 @@
       (token-cond t type
         [eof '()]
         [(and (eq? type 'quote) (eq? (token-value t) 'datum-comment))
-         (let* ([tokens (mark (make-token-port (expr-tokens tp)))]
+         (let* ([tokens (mark (make-token-port (expr-tokens tp '() reverse)))]
                 [expr (cons t tokens)])
            (append
             (add-prop expr (token-prop comment datum-comment))
             (mark tp)))]
         [(eq? type 'lblock-comment)
-         (let ([comment (cons t (block-tokens tp))])
+         (let ([comment (cons t (block-tokens tp '() reverse))])
            (append
             (add-prop comment (token-prop comment block-comment))
             (mark tp)))]
@@ -790,7 +788,7 @@
            (s1 (get-token ip) indent rlevels)]
           [(eq? type 'lblock-comment)
            (put-token op t)
-           (emit-tokens op (block-tokens ip))
+           (emit-tokens op (block-tokens ip '() reverse))
            (s1 (get-token ip) indent rlevels)]
           [(token-open? t)
            (put-token op t)
